@@ -16,7 +16,7 @@ checks it). The format is fixed, because Conduit reads it:
 ## 0.140.3 (2026-11-10)
 
 ### New and improved
-- Work can be started from the chats this host lists (by default the desktop app, Conduit on the iPhone, and one voice chat), as well as from a bot's Bot Chat. A chat that isn't listed is still refused, and the reply names the source, chat type, and profile it saw.
+- Work can be started from a bot's Bot Chat and from the chats this host lists by session. The voice chat submits into the primary Bot Chat, and a second copy of the same request is not started again. The desktop app and Conduit stay off until a login captured from a refusal is pinned. A refused chat names the source, chat type, profile, and login it saw.
 
 ## 0.140.2 (2026-11-08)
 

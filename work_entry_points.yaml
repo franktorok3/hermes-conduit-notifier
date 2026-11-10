@@ -1,35 +1,40 @@
 # Chats that may submit work besides a bot's Bot Chat.
 #
-# An entry matches only when every field matches the turn. session_ids is
-# optional: with it, the turn's session id (or the session key's chat id)
-# must be one of them; without it, every session of that shape may submit.
-# No wildcards. A profile replaces this whole list with a regular file at
-# <profile home>/conduit/work-entry-points.yaml.
+# An entry matches only when source and profile match, and it names a
+# session id or a user_id. Source alone authorizes nothing: a client
+# chooses source on session.create. user_id is the login Hermes stores
+# from the authenticated transport (tui_gateway _transport_auth_user_id),
+# not a field the client sends. An empty user_id never matches.
 #
-# Source is the sessions.source column. Platform and chat type are the
-# gateway session key's (agent:<profile>:<platform>:<chat type>:<chat id>).
-# A local row with no key is filled in as noted on each entry below; the
-# refusal still reports the empty raw values.
+# platform and chat_type, when set, come from the gateway session key on
+# the row. They are not read from HERMES_SESSION_PLATFORM: the client
+# influences that by the source it sends. A desktop row on this host has
+# an empty chat_type and no session key, so those fields are omitted here.
+#
+# capture: log the raw identity of a refused turn (source, platform,
+# chat type, profile, user_id, session id). No message text. Turn it off
+# once the logins below are pinned.
+#
+# A profile replaces this whole file with a regular file at
+# <profile home>/conduit/work-entry-points.yaml. No wildcards.
+
+capture: true
 
 entries:
-  # Focal Point, the primary instance. The owner named this Bot Chat on
-  # 2026-11-08: source tui, platform local, session 20261003_132936_3ec1ac.
-  # The Bot Chat title rule still accepts it on its own. Chat type dm is
-  # the local key's (agent:main:local:dm:<id>); a tui row with no key is
-  # filled in as platform local, chat type dm.
+  # Focal Point, the primary coordinator for the shared workspace.
+  # Source tui, session 20261003_132936_3ec1ac (owner, 2026-11-08).
+  # The Bot Chat title rule still accepts a chat titled "Bot Chat".
+  # Other listed chats submit into this session's registry.
   - name: focal-point-primary
     source: tui
-    platform: local
-    chat_type: dm
     profile: default
     session_ids:
       - "20261003_132936_3ec1ac"
 
-  # Focal Banger voice tunnel, via the focalpoint-aipi-voice-bridge service.
-  # The owner named it on 2026-11-08. The API server stamps source
-  # api_server (gateway/platforms/api_server.py _SESSION_SOURCE) and keys
-  # the chat agent:<profile>:api_server:dm:<id>. Any other api_server chat
-  # stays refused.
+  # Focal Banger voice tunnel, via focalpoint-aipi-voice-bridge.
+  # The API server stamps source api_server and keys the chat
+  # agent:<profile>:api_server:dm:<id>. The host row is chat_type dm.
+  # Any other api_server chat stays refused.
   - name: focal-banger-voice
     source: api_server
     platform: api_server
@@ -38,54 +43,33 @@ entries:
     session_ids:
       - "f3235085-389c-4498-9b03-1369cd08af1f"
 
-  # Hermes Desktop on the Mac. The desktop renderer sends source desktop
-  # and tui_gateway stores that (Hermes PR 58405; issue 106261). With
-  # HERMES_DESKTOP the agent platform is desktop. A dashboard session often
-  # has no gateway key; a missing key is filled in as platform desktop,
-  # chat type dm. The exact session id is not known, so none is required.
+  # Hermes Desktop on the Mac. Disabled. Every chat gets a new session
+  # id, so pinning ids does not work. The host's desktop rows (read
+  # 2026-11-10) have an empty chat_type, and empty session_key, chat_id
+  # and origin_json. user_id was uid:1000 (most recent, Nov 8),
+  # basic:frank (Nov 2), or empty. There is no per-device id the client
+  # cannot forge and that is unique to the Mac app: user_id is the
+  # server-recorded login, shared by every desktop chat of that login.
+  # Saved voice transcripts are also source desktop, with no login, and
+  # must stay refused.
+  #
+  # To enable after a captured refusal shows the login:
+  #   enabled: true
+  #   user_ids:
+  #     - "uid:1000"
   - name: hermes-desktop
+    enabled: false
     source: desktop
-    platform: desktop
-    chat_type: dm
     profile: default
 
-  # The same desktop rows once the gateway owns them. Local routing identity
-  # is Platform.LOCAL, so the key is agent:<profile>:local:dm:<id>
-  # (this plugin's own reading of build_session_key). Inferred: Frank's Mac
-  # session was not observed. Included so a desktop row with a local key is
-  # not refused for the platform field.
-  - name: hermes-desktop-local
-    source: desktop
-    platform: local
-    chat_type: dm
-    profile: default
-
-  # Hermes Conduit on the iPhone. No session source is named "conduit" or
-  # "push": "conduit" is the turn's X-Conduit-Client header
-  # (reply_sources.turn_source), and "push" is the notification path.
-  # This plugin's gateway adapter stores source gui
-  # (gateway_chats.py, HermesClient.createParams). Authority chats are
-  # keyed agent:<profile>:local:dm:<id>. The phone's session id is not known.
+  # Hermes Conduit on the iPhone. Disabled. The host has no session with
+  # source gui (api_server 90, desktop 9, oneshot 6, tui 1). This plugin's
+  # authority adapter would store gui, and that path has not created a
+  # row. X-Conduit-Client is a header the client sends; it is not read
+  # here. The phone's chats are likely source desktop, the same shape as
+  # the Mac app. Pin user_ids from a captured refusal, and set source to
+  # the captured value, before enabling. Do not enable on source alone.
   - name: conduit-iphone
-    source: gui
-    platform: local
-    chat_type: dm
-    profile: default
-
-  # A gui row with no key. gateway.session_policy.SURFACES maps the gui
-  # creation label onto the desktop surface, so the fill-in platform is
-  # desktop. Inferred from that mapping, not from a captured phone session.
-  - name: conduit-iphone-surface
-    source: gui
-    platform: desktop
-    chat_type: dm
-    profile: default
-
-  # The authority hands the agent the raw label gui (Hermes issue 150877:
-  # stored prompts show "Platform: gui"). That is the turn platform when
-  # the row has no key and the turn bound gui. Inferred the same way.
-  - name: conduit-iphone-gui
-    source: gui
-    platform: gui
-    chat_type: dm
+    enabled: false
+    source: desktop
     profile: default

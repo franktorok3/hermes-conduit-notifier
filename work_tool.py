@@ -6,11 +6,11 @@ The coordinator gets nine tools (``work_list``, ``work_start``, ``work_send``,
 ``work_note``).
 They answer in this bot's canonical Bot Chat, and only while the bot's
 setting (``conduit-push work on``) is on. A chat the host lists in
-``work_entry_points.yaml`` (source, platform, chat type, profile, and a
-session id when the entry gives one) may submit work the same way. In a
-group room hosted here with only this host's bots, a turn of the bot's may
-start, send to, stop and read its work too (room_work): that work reports
-back into the room. Every one that names work takes a
+``work_entry_points.yaml`` may submit work too, into the Focal Point
+primary's registry, and only when the entry names a session id or the
+server-recorded login. In a group room hosted here with only this host's
+bots, a turn of the bot's may start, send to, stop and read its work too
+(room_work): that work reports back into the room. Every one that names work takes a
 ref (W1, A1) from this bot's own registry (work_store), never a session id,
 so a coordinator can't reach a session that isn't its bot's work. (A result
 carries the session's id only inside its links, ``conduit://session/`` for
@@ -534,10 +534,13 @@ def _not_bot_chat(session_id: Any, home: Path, note: str) -> dict:
     """The not_bot_chat refusal, naming the source, chat type and profile
     this turn actually had so the next mismatch can be told apart."""
     found = work_entry_points.seen(session_id, home)
+    work_entry_points.record_refusal(session_id, home)
     if note == NOT_BOT_CHAT:
-        showed = {field: found[field] or "unknown" for field in ("source", "platform", "chat_type", "profile")}
+        showed = {field: found[field] or "unknown"
+                  for field in ("source", "platform", "chat_type", "profile", "user_id")}
         note = (f"{note} Saw source {showed['source']}, platform {showed['platform']}, "
-                f"chat type {showed['chat_type']}, profile {showed['profile']}.")
+                f"chat type {showed['chat_type']}, profile {showed['profile']}, "
+                f"user_id {showed['user_id']}.")
     return {"ok": False, "error": "not_bot_chat", "note": note, **found}
 
 
@@ -707,7 +710,15 @@ def _handle(name: str, args: dict, session_id: Any) -> dict:
     if name == "work_start":
         if room is not None:
             return _start(home, store, broker, args, _bot_chat_of(home), room=room)
-        return _start(home, store, broker, args, str(session_id).strip())
+        caller = str(session_id).strip()
+        # A listed chat that is not the primary submits into the primary's
+        # registry. The primary, and a titled Bot Chat, coordinate their own.
+        coordinator, dedupe = caller, False
+        if not is_bot_chat(session_id, home):
+            primary = work_entry_points.primary_session_id(home)
+            if primary:
+                coordinator, dedupe = primary, caller != primary
+        return _start(home, store, broker, args, coordinator, exact_dedupe=dedupe)
     work = store.get(args.get("ref"))
     if work is None:
         return _no_such(args.get("ref"))
@@ -1009,7 +1020,7 @@ def _list(store: work_store.Store, args: dict) -> dict:
 
 
 def _start(home: Path, store: work_store.Store, broker: work_broker.Broker, args: dict, coordinator: str,
-           room: Optional[room_work.Room] = None) -> dict:
+           room: Optional[room_work.Room] = None, exact_dedupe: bool = False) -> dict:
     # A model that guessed the schema (behind Tool Search) names the task
     # goal or task; a missing title comes from the instructions.
     instructions = next((str(args[key]).strip() for key in ("instructions", "goal", "task", "prompt")
@@ -1023,6 +1034,17 @@ def _start(home: Path, store: work_store.Store, broker: work_broker.Broker, args
         # The title names its session, and that one names the coordinator.
         return {"ok": False, "error": "title", "note": "That's the coordinator's own title. Give the workstream "
                                                        "one that says what it's doing."}
+    if exact_dedupe:
+        # A listed chat that isn't the primary shares the primary's registry.
+        # The same title and instructions are the same request, even with
+        # new=true: a second entry point must not open a second workstream.
+        same = next((work for work in store.list(active_only=True, limit=500)
+                     if work.kind == "workstream" and not work.closed_at and _same_request(work, title, instructions)),
+                    None)
+        if same is not None:
+            return {"ok": True, "ref": same.ref, "deduped": True, "title": same.title,
+                    "note": (f"{same.ref} is already open for this work ({same.title}), coordinated from the "
+                             "primary chat. Nothing new was started.")}
     if not args.get("new"):
         mine = _words(title) - _GENERIC
         # Only what's working now, or finished moments ago: settled work from
@@ -4605,6 +4627,14 @@ _GENERIC = frozenset("count list show get latest current version versions file f
 
 
 _SHORT_WORDS = frozenset("on in to of is it up at be do as or if by an my we so no me us am go".split())
+
+
+def _same_request(work: work_store.Work, title: str, instructions: str) -> bool:
+    """The same title and instructions, ignoring case and repeated spaces."""
+    def flat(value: str) -> str:
+        return " ".join(value.casefold().split())
+
+    return flat(work.title) == flat(title) and flat(work.goal) == flat(instructions)
 
 
 def _words(value: Any) -> set[str]:
