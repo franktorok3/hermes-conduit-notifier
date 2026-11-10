@@ -171,7 +171,6 @@ class Copies:
         sent = copy["sent"]
         if sent is not None and now - sent["at"] < WAIT_S:
             return
-        digest = _digest(state)
         try:
             page = self.hermes.read_events(found.service.db_path, room_id=room_id, since_seq=copy["acked"],
                                            limit=PAGE_EVENTS, include_disbanded=True)
@@ -179,6 +178,10 @@ class Copies:
             self._tell_once(f"read:{room_id}", "Linked Rooms couldn't read room %s's log for its copies (%s)",
                             room_id, type(exc).__name__)
             return
+        # The room's authority counts as its state: a room Hermes moved while nothing went on in it still sends
+        # a page, from which guests take its later epoch before their agents' next turn (on_page).
+        authority = page.get("authority") if isinstance(page.get("authority"), dict) else {}
+        digest = _digest({**state, "authority": [authority.get("gateway_id"), authority.get("epoch")]})
         if not page.get("events") and digest == copy["state"]:
             if draft["status"] == "ended" and not copy.get("done"):
                 with self.rooms.store.update() as stored:
@@ -217,6 +220,19 @@ class Copies:
             if kept is None or _copy_of(kept, link_id)["sent"] != sent:
                 return  # gone, or its answer came while this page was read
             _copy_of(kept, link_id, keep=True)["sent"] = waiting
+        # The room files its messages name go after it (room_files_link).
+        files = getattr(self.rooms, "files", None)
+        if files is not None:
+            try:
+                # Only what the home's own people sent: a linked person's post naming a path carries nothing.
+                # From the events as Hermes gave them: one too big for a page goes without its payload.
+                whole = {event.get("event_id"): event for event in page.get("events") or ()
+                         if isinstance(event, dict)}
+                files.note(room_id, link_id, [whole.get(event.get("event_id"), event) for event in events
+                                              if isinstance(event, dict) and event.get("event_id") not in posts])
+            except Exception as exc:  # noqa: BLE001 - the page goes either way
+                self._tell_once(f"files:{room_id}", "Linked Rooms couldn't note room %s's files (%s)", room_id,
+                                type(exc).__name__)
         try:
             self.rooms.send(link_id, PAGE, body, message_id=message_id)
         except room_links.LinkError as exc:
@@ -339,6 +355,20 @@ class Copies:
             except Exception as exc:  # noqa: BLE001 - the home sends it again
                 logger.warning("Linked Rooms couldn't keep a page of room %s (%s)", room_id, type(exc).__name__)
                 return
+        files = getattr(self.rooms, "files", None)
+        if files is not None:
+            try:
+                # The upload folders its home's messages name are that home's (room_files_link.Files.claim).
+                files.claim(received.link_id, body["page"].get("events"),
+                            [each["event_id"] for each in body.get("posts", ())])
+            except Exception as exc:  # noqa: BLE001 - the page is kept either way
+                self._tell_once(f"claim:{room_id}", "Linked Rooms couldn't note room %s's upload folders (%s)",
+                                room_id, type(exc).__name__)
+        epoch = body["page"]["authority"].get("epoch")
+        if type(epoch) is int and epoch > invite["authority_epoch"]:
+            # Hermes moved the room into its gateway's store (a page at a later epoch is one Hermes took above,
+            # which refuses an older one): the turns it sends carry the new epoch now.
+            self.rooms.follow_epoch(key, epoch)
         try:
             self.rooms.send(received.link_id, COPIED, {"v": VERSION, "room_id": room_id, "seq": seq},
                             message_id=f"{COPIED}:" + hashlib.sha256(

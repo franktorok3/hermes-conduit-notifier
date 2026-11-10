@@ -13,10 +13,341 @@ checks it). The format is fixed, because Conduit reads it:
 - One line per change, starting with `- `. Fixes say what goes wrong without
   the update. Plain words: these show on a phone.
 
-## 0.140.3 (2026-11-10)
+## 0.154.1 (2026-11-10)
 
 ### New and improved
-- Work can be started from a bot's Bot Chat and from the chats this host lists by session. The voice chat submits into the primary Bot Chat, and a second copy of the same request is not started again. The desktop app and Conduit stay off until a login captured from a refusal is pinned. A refused chat names the source, chat type, profile, and login it saw.
+- Work can be started from a bot's Bot Chat and from the chats this host
+  lists by session. The voice chat submits into the primary Bot Chat, and
+  a second copy of the same request is not started again. The desktop app
+  and Conduit stay off until a login captured from a refusal is pinned. A
+  refused chat names the source, chat type, profile, and login it saw.
+
+## 0.154.0 (2026-11-10)
+
+### New and improved
+- A Bot Chat keeps its workstreams working together. It sees what each one
+  found, relies on and changed, and what you told it in its own chat, and
+  acts when one affects another. Under Edit Bot > Work > Coordination, Ask
+  (the default) has it ask you before it starts, stops or redirects work on
+  its own, Automatic lets it, and Off keeps it as it was.
+- A work update the bot has nothing to tell you about stays silent.
+- Leave alone on a workstream's card keeps the bot from sending to it or
+  stopping it on its own.
+
+## 0.153.8 (2026-11-10)
+
+### Fixes
+- Pulse no longer reads a subagent's chat as if you wrote it, so a task a
+  bot handed to a subagent no longer comes up as "You requested…". What it
+  already learned that way is forgotten once.
+
+## 0.153.7 (2026-11-10)
+
+### Fixes
+- A script's `hermes chat --source tool` run, a one-shot `hermes chat -q`
+  and a Kanban worker no longer send a reply, failure or background-task
+  notification or show Lock Screen progress. Their answers go to whoever
+  ran them; one they write with `conduit_notify` still comes.
+
+## 0.153.6 (2026-11-10)
+
+### Fixes
+- A bot whose tool call carries arguments that aren't valid JSON is told
+  what's wrong with them, instead of being refused as if it had asked for
+  nothing.
+- A workstream's update that Hermes took too long to accept still counts
+  as Conduit's own turn, so its review card isn't refused when only the
+  desktop app has the Bot Chat open.
+- A review of seven or eight options from a workstream with a long name
+  keeps "(more)" on its second half, so the two halves read differently.
+
+## 0.153.5 (2026-11-10)
+
+### Fixes
+- A message a Bot Chat sends to a workstream is no longer sent a second time
+  after a restart when Hermes had saved it joined to another message, such
+  as your own words sent at the same moment.
+
+## 0.153.4 (2026-11-10)
+
+### Fixes
+- On a Hermes newer than 0.23.0, your first message after a Pulse report no
+  longer hands the report to your memory provider as your last message.
+
+## 0.153.3 (2026-11-10)
+
+### Fixes
+- A Pulse card keeps a short sentence that adds one word to its headline,
+  such as "today" or a name, instead of dropping it as a repeat.
+- A Pulse date card no longer says whose day it is as "The user's".
+
+## 0.153.2 (2026-11-10)
+
+### Fixes
+- Pulse cards that Pulse's learning brings up on its own get the same
+  headline, facts and buttons as the rest, instead of plain text.
+- Pulse cards no longer repeat their headline in the sentence under it,
+  draw a due bar that starts and ends on the same day, or show "your"
+  where a date names whose it is.
+
+### New and improved
+- Pulse asks for shorter headlines, a named first step instead of a bare
+  "Do it", and a job's run history when it has one.
+
+## 0.153.1 (2026-11-09)
+
+### Fixes
+- A workstream's update that waits behind a long turn still shows its cards
+  in the chat when it starts, even if only Desktop has the chat open then.
+- Two identical workstream updates sent close together each count as the
+  plugin's own, not just the first.
+
+## 0.153.0 (2026-11-09)
+
+### New and improved
+- Local Live's agent mode now works on speech servers that only read text
+  aloud, like a self-hosted voice adapter: your fast model answers each thing
+  you say and hands real work to Hermes as a job, so replies start sooner
+  instead of waiting for a full Hermes turn.
+
+## 0.152.0 (2026-11-09)
+
+### Fixes
+- An iPad or iPhone still on an older Conduit, opened in the last few days,
+  no longer keeps newer cards (like review cards) from showing on the device
+  you're using. The older one shows less until you update it.
+- When a bot's tool call can't be read, it now hears exactly what was wrong
+  with it, so it can fix the call instead of giving up on the card.
+- A card your Bot Chat shows when a workstream reports back is no longer
+  refused because Hermes Desktop or a browser had the chat open at the time,
+  and that update's reply no longer counts as sent from Desktop (for its
+  notification and for calls held while you're at a screen).
+- With a chat open in Conduit and in Hermes Desktop at once, a message from
+  the phone that has it on screen gets cards again: the bot is told to draw
+  them, and hears which Conduit screen you wrote from.
+
+## 0.151.0 (2026-11-09)
+
+### New and improved
+- When a bot writes a card out as text in its reply instead of showing it
+  (some free and smaller models do), the plugin now shows the card in its
+  place, and Conduit draws it under the reply. Needs a Conduit build with
+  this change; older ones show the reply without the markup.
+
+## 0.150.4 (2026-11-09)
+
+### Fixes
+- When a workstream reported seven design options, the review card the
+  plugin built from them showed only six. It now splits seven or eight
+  options into two halves, so every one shows.
+
+## 0.150.3 (2026-11-09)
+
+### Fixes
+- A bot could write the review card for its workstream's options out as
+  text in its reply instead of showing it. The plugin now builds that card
+  from the workstream's report, so the bot shows it with one short call,
+  and a later round stays the same review.
+
+## 0.150.2 (2026-11-09)
+
+### Fixes
+- Options a bot's workstream made for you to pick from (designs, layouts,
+  pictures) came back as links to files instead of a card. The Bot Chat now
+  shows them as a review card you mark, and your marks go back to that
+  workstream.
+
+## 0.150.1 (2026-11-09)
+
+### Fixes
+- In a group room your Hermes hosts, tapping a bot's notification opened
+  that bot's hidden chat for the room instead of the room. Replies, failed
+  turns, finished background tasks and approvals now open the room, titled
+  with its name, and so does an approval's row in Needs you. Needs the
+  latest Conduit.
+- In a room that routes through its lead, the lead's pick of who answers
+  sent a notification of its own, showing raw JSON. It no longer does; the
+  reply from whoever takes the message still notifies.
+
+## 0.150.0 (2026-11-09)
+
+### Fixes
+- A report could come out as a card with no buttons, about something a
+  follow-up card already showed. Every report card now comes from Pulse's
+  checked list, with its own buttons, and never repeats a card still open.
+
+### New and improved
+- Pulse cards can show what they're about: a date, a deadline, a job's
+  recent runs, a promise in the words it was made, a status or the steps of
+  something underway, with up to two buttons. Ask puts words in the chat for
+  you to edit and send. The latest Conduit draws them; older apps show the
+  cards as before.
+- When something Pulse is following changes (a job fails again, or
+  recovers), its card is updated or closed instead of a new one appearing.
+  If it happens again after it was over, that's a new card.
+- The morning brief comes in parts the app can lay out: a summary, what's
+  on today, what's still open, and how many of each.
+
+## 0.149.1 (2026-11-09)
+
+### Fixes
+- In a room hosted on a Windows computer whose Hermes lives on a network
+  share, Conduit on another host showed the room's pictures and files by
+  name instead of drawing and opening them.
+
+## 0.149.0 (2026-11-09)
+
+### New and improved
+- In a Linked Room, every bot sees the pictures and files sent into the
+  room, whoever's host it runs on: each file goes to the guests' hosts,
+  and a guest's bot reads its own host's copy.
+- Bots in a room with other people's agents may look at a picture sent
+  into the room, whatever else the room's rules allow them.
+- In a room someone else hosts, Conduit draws its pictures and opens its
+  files from your own host's copy, instead of showing them by name.
+
+## 0.148.1 (2026-11-09)
+
+### Fixes
+- A review's next round no longer loses what you marked when Hermes shows
+  it without the decisions' ids: a decision with the same title keeps its
+  marks, and a new one never takes an old one's place.
+- A resent review is no longer cleared, and Hermes shows one round of a
+  review at a time.
+- Hermes no longer reads a review you marked only partly as fully marked.
+
+## 0.148.0 (2026-11-09)
+
+### New and improved
+- A bot's Bot Chat now does quick things itself with any of its tools, and
+  hands work to the background only once it takes more than a few steps.
+  Simple asks are answered where you're reading instead of in a hidden chat.
+- Cards, Apple Maps and the password vault's prompts always show in the Bot
+  Chat, whatever its setting.
+- A new setting, Everything Here, has the Bot Chat do all of it itself and
+  start background work only when it's long or you ask.
+
+## 0.147.2 (2026-11-09)
+
+### Fixes
+- On a host that manages the plugin, Finish Update could leave the gateway
+  on the old plugin where systemd runs it as root (an LXC host). The host
+  now runs those restarts itself, as an update does, and still pulls
+  nothing.
+
+## 0.147.1 (2026-11-09)
+
+### Fixes
+- With a memory provider such as Hindsight or Honcho, every Pulse report,
+  brief and delivery check was saved and recalled like your own messages,
+  and a provider that reprocesses the whole chat each time could cost
+  dollars a day. Pulse's turns now stay out of the memory provider; what
+  you write in the Pulse chat is saved as before.
+
+## 0.147.0 (2026-11-08)
+
+### New and improved
+- Hermes can show you options to choose between when they're easier to see
+  than to describe: layouts, colours, charts, posters. Tap the one you like
+  right in the chat, or open a review to mark several choices Approve,
+  Change or Skip with notes, and Hermes comes back with the next round.
+- In Bot Mode, a workstream draws the options and your Bot Chat shows them:
+  your marks go straight back to that workstream, every round.
+
+## 0.146.0 (2026-11-08)
+
+### New and improved
+- A host that installs and upgrades the plugin itself can say so with
+  CONDUIT_PUSH_MANAGED. Conduit then stops asking to update the plugin on
+  that host, and an update started from Conduit is refused, so the host
+  keeps the version it was tested with.
+
+## 0.145.0 (2026-11-08)
+
+### New and improved
+- When your agent reads a room with other people for you, a message's
+  pictures and files are named in it, and a message of files alone is
+  read too, now that Conduit sends them as the room's own attachments.
+
+## 0.143.1 (2026-11-08)
+
+### Fixes
+- Pulse made two or three copies of the same card from one check, and the
+  morning brief came more than once: on a host with profiles, each profile's
+  copy of the plugin ran Pulse. Now only one does.
+- Pulse cards came back after you marked them Done: one oddly saved date
+  made every check skip looking at earlier cards. Dates saved like that no
+  longer stop any of Pulse's checks, and a card you marked Done or put away
+  keeps the same words from coming back for a month (one about a reminder,
+  a calendar entry or something Pulse remembers keeps that thing's rules).
+
+## 0.143.0 (2026-11-08)
+
+### New and improved
+- Files sent into a group room (PDFs, text, pasted text, audio, video)
+  open, preview and play in Conduit as they do in a chat, instead of
+  showing as a name you can't tap. In a room someone else hosts, they
+  still show by name.
+
+## 0.142.0 (2026-11-08)
+
+### New and improved
+- A picture sent into a group room shows as the picture in Conduit,
+  instead of a file icon and its name. In a room someone else hosts, it
+  still shows by name.
+
+## 0.141.6 (2026-11-08)
+
+### Fixes
+- Cards a workstream drew before you stopped it never reached its Bot
+  Chat, because a stopped turn sends no update. The bot's next update
+  from it now names them, so they're shown in the Bot Chat.
+
+## 0.141.5 (2026-11-08)
+
+### Fixes
+- A bot asked for a map or the nearest shop in its Bot Chat handed it to a
+  workstream, and the map it drew stayed in that workstream's chat. With
+  "Also Looks Things Up" on, the bot now looks places, directions and
+  travel times up itself, and cards a workstream draws (maps, forecasts
+  and the rest) are shown again in the Bot Chat.
+
+## 0.141.4 (2026-11-08)
+
+### Fixes
+- In a room with linked people, @mentioning one bot got you an answer from
+  it, but its reply often tagged another bot, and Hermes gives a turn to
+  any bot that's tagged, so both answered anyway. A bot you @mention now
+  answers you itself and tags another only when you asked for them.
+
+## 0.141.1 (2026-11-08)
+
+### Fixes
+- A bot's work kept showing "Needs you" after you answered its question in
+  the Bot Chat or in the reply field on its card: the answer waited behind
+  the question instead of answering it. Your answer now answers the
+  question, and the work carries on. The bot passes on only what you said
+  in that chat, never an answer of its own.
+
+## 0.141.0 (2026-11-08)
+
+### Fixes
+- On a host whose dashboard runs on its own beside the gateway, a room with
+  linked people stopped working once the gateway restarted: Hermes moves
+  such rooms into the gateway, and the plugin kept using the old, frozen
+  copy. The other people's copies stopped getting new messages, and their
+  agents' turns were refused. Rooms now follow Hermes into the gateway, the
+  gateway takes the rooms' mail, and the other people's agents get grants
+  for the room as it goes on. New rooms start in the gateway whenever it
+  runs.
+
+## 0.140.3 (2026-11-08)
+
+### Fixes
+- A card's choice field that listed the same option twice (Yes and yes)
+  reached the phone with both, so its picker couldn't tell them apart. It
+  now keeps one of each, and a choice left with fewer than two options is
+  dropped.
 
 ## 0.140.2 (2026-11-08)
 

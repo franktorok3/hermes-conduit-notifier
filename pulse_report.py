@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -179,8 +178,24 @@ def _clip(text: Any, limit: int) -> str:
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-def _local(epoch: float, zone: tzinfo) -> str:
-    return datetime.fromtimestamp(epoch, zone).strftime("%a %d %b %H:%M")
+def _local(epoch: Any, zone: tzinfo) -> str:
+    """``epoch`` as local time. A time something outside Pulse wrote into
+    its store as text ("2026-11-03 15:43:11", read as local) is read too,
+    and one that isn't a time is "?": a single odd row once failed every
+    report's candidate list (Eric, 2026-11-08)."""
+    if isinstance(epoch, str):
+        try:
+            when = datetime.fromisoformat(epoch.strip())
+        except ValueError:
+            return "?"
+        when = when.replace(tzinfo=zone) if when.tzinfo is None else when.astimezone(zone)
+        return when.strftime("%a %d %b %H:%M")
+    if isinstance(epoch, bool) or not isinstance(epoch, (int, float)):
+        return "?"
+    try:
+        return datetime.fromtimestamp(epoch, zone).strftime("%a %d %b %H:%M")
+    except (OverflowError, OSError, ValueError):
+        return "?"
 
 
 def profile_homes(home: Path) -> list[tuple[str, Path]]:
@@ -457,9 +472,11 @@ def _active_jobs(home: Path) -> list[dict]:
             and job.get("state") not in ("paused", "completed")]
 
 
-def cron_jobs(home: Path, others: Sequence[tuple[str, Path]] = ()) -> str:
+def cron_jobs(home: Path, others: Sequence[tuple[str, Path]] = (), keys: Optional[dict[str, str]] = None) -> str:
     """Hermes's active cron jobs: a promise with a job behind it is handled,
-    unless the job is failing (``job_health``), which covers nothing."""
+    unless the job is failing (``job_health``), which covers nothing. With
+    ``keys``, each job listed gets a key ("j1"), and ``keys`` maps it to the
+    job's lasting subject ("job:<profile>:<id>", pulse_picks)."""
     active = [("", job) for job in _active_jobs(home)]
     for profile, path in others:
         active += [(profile, job) for job in _active_jobs(path)]
@@ -471,7 +488,11 @@ def cron_jobs(home: Path, others: Sequence[tuple[str, Path]] = ()) -> str:
         when = _clip(job.get("schedule_display") or "", 60)
         upcoming = job.get("next_run_at")
         health = job_health(job)
-        lines.append(f"- {f'[{profile}] ' if profile else ''}{_clip(job.get('name') or job.get('id'), 80)} ({when}"
+        key = ""
+        if keys is not None and str(job.get("id") or ""):
+            key = f"j{len(keys) + 1} "
+            keys[key.strip()] = f"job:{profile}:{job['id']}"
+        lines.append(f"- {key}{f'[{profile}] ' if profile else ''}{_clip(job.get('name') or job.get('id'), 80)} ({when}"
                      + (f", next {_clip(upcoming, 40)}" if upcoming else "") + ")"
                      + (f" [failing: {health}]" if health else "") + f": {_clip(job.get('prompt'), 160)}")
     more = f"\n(and {len(active) - MAX_JOBS} more)" if len(active) > MAX_JOBS else ""
@@ -907,6 +928,9 @@ class Gathered:
     # candidate may name by its title (pulse_candidates.found_row).
     events: dict[str, dict] = field(default_factory=dict)
     upcoming: list[dict] = field(default_factory=list)
+    # With ``keyed``: the scheduled jobs listed (by key, "j1"), each as its
+    # lasting subject (pulse_picks).
+    jobs: dict[str, str] = field(default_factory=dict)
 
 
 def build(home: Path, pulse_store: store.PulseStore, *, home_chat_id: str, now: float,
@@ -932,6 +956,7 @@ def gather(home: Path, pulse_store: store.PulseStore, *, home_chat_id: str, now:
     reminders: Optional[dict[str, dict]] = {} if keyed else None
     events: Optional[dict[str, dict]] = {} if keyed else None
     upcoming: Optional[list[dict]] = [] if keyed else None
+    jobs: Optional[dict[str, str]] = {} if keyed else None
     phone, zone_name = phone_context(home, now, reminders=reminders, events=events, upcoming=upcoming)
     zone_name = pulse_store.get("time_zone") or zone_name
     zone = zone_for(zone_name)
@@ -953,7 +978,7 @@ def gather(home: Path, pulse_store: store.PulseStore, *, home_chat_id: str, now:
                 ended_text, extra, phone,
                 inbox_context(home, since),
                 evidence.background(home, zone),
-                cron_jobs(home, others), failed_calls(pulse_store, since, zone), memory_files(home, others)]
+                cron_jobs(home, others, keys=jobs), failed_calls(pulse_store, since, zone), memory_files(home, others)]
     sections = [section for section in sections if section]
     # With memory on, chats it has already read show only as what it kept from them
     # (often nothing): the report spends its room on what memory hasn't seen.
@@ -984,8 +1009,9 @@ def gather(home: Path, pulse_store: store.PulseStore, *, home_chat_id: str, now:
         ended = {key: event for key, event in ended.items() if f"\n- {key} " in rest}
         reminders = {key: r for key, r in (reminders or {}).items() if f"\n- {key} " in rest}
         events = {key: e for key, e in (events or {}).items() if f"\n- {key} " in rest}
+        jobs = {key: job for key, job in (jobs or {}).items() if f"\n- {key} " in rest}
     return Gathered(rest + "\n\n" + chats, start, shown, resting, keys or {}, zone, done, ended, reminders or {},
-                    events or {}, upcoming or [])
+                    events or {}, upcoming or [], jobs or {})
 
 
 def report_room(note: str = "") -> int:
@@ -1023,23 +1049,6 @@ def note_block(text: str) -> str:
     nothing without one."""
     text = text.strip() if isinstance(text, str) else ""
     return f"\n\n{NOTE_TITLE}\n{text}" if text else ""
-
-
-def report_text(tag: str, context: str, since: str, nudge: str = "balanced", note: str = "") -> str:
-    """The report turn's message, its context cut at the end if it would
-    take the message over report_budget()."""
-    bar = BARS.get(nudge, BARS["balanced"])
-    kinds = ", ".join(FOUND_KINDS)
-    block = note_block(note)
-    # A fresh marker per report, so text in the context can't close the fence.
-    fence = secrets.token_hex(6)
-    while fence in context:
-        fence = secrets.token_hex(6)
-    room = report_budget(note) - len(REPORT_TEXT.format(tag=tag, kinds=kinds, context="", since=since, fence=fence,
-                                                    bar=bar, note=block))
-    if len(context) > room:
-        context = context[:max(0, room - 1)] + "…"
-    return REPORT_TEXT.format(tag=tag, kinds=kinds, context=context, since=since, fence=fence, bar=bar, note=block)
 
 
 # Ratings ------------------------------------------------------------------------

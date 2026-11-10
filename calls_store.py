@@ -292,6 +292,8 @@ SESSION_KEY_MAX_BYTES = 512
 _SESSION_KEY_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The shape the call event carries (events.sanitize_call).
 _WATCH_ID = re.compile(r"^[A-Za-z0-9_-]{8,64}\Z")
+# A group room's id, as events.py checks it.
+_ROOM_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _thread_lock = threading.Lock()
 
 # answers_ready's "not yet" per (file, batch), kept while the file is unchanged.
@@ -518,11 +520,13 @@ class CallStore:
 
     def note_waiting(self, session_id: str | list[str], kind: str, *, request_id: str = "",
                      questions: Any = None, description: Any = "", command: Any = "",
-                     title: Any = "") -> bool:
+                     title: Any = "", room: Any = "") -> bool:
         """Hermes waits on the user in ``session_id`` (or the ids its session
         goes by, the chat titled ``title``): a question batch (``request_id``,
         the clarify loop's own decision id, and ``questions``) or an approval
-        (``description`` and ``command``). Kept for Conduit's "Needs you"
+        (``description`` and ``command``), in the group room ``room`` this
+        Hermes hosts when it's a room member's turn (hermes-conduit#2064:
+        Needs you opens the room). Kept for Conduit's "Needs you"
         list always, and so a call about it can read and answer it with no
         chat open while alert calls are on: True only then (the wait is
         ``followed``). A newer wait of the same kind in the session replaces
@@ -538,7 +542,7 @@ class CallStore:
         followed = bool(settings["enabled"] and settings["alerts"])
         entry = _waiting_entry({
             "id": secrets.token_hex(12), "session_ids": ids, "kind": kind, "at": self.clock(),
-            "followed": followed, "title": title,
+            "followed": followed, "title": title, "room": room,
             "request_id": request_id, "questions": questions, "description": description,
             "command": command if isinstance(command, str) else "",
             "command_sha": hashlib.sha256(command.encode("utf-8")).hexdigest() if isinstance(command, str) and command else "",
@@ -682,6 +686,38 @@ class CallStore:
             if following is not None:
                 result["next"] = _public_question(item["questions"][following], following, form)
             return result
+
+    def answer_in_writing(self, session_id: Any, words: Any, *, asked_before: float | None = None) -> bool:
+        """The user's written answer, from outside the chat (the Bot Chat
+        passing it on, a workstream's card in Conduit), to the question batch
+        Hermes waits on in ``session_id``: every question still open takes
+        the words as written, as a reply typed on the card would, whether
+        or not a call follows the wait. True when the batch is answered now,
+        for the clarify loop to take (``take_answers``); False when no
+        question waits there (an approval, or nothing), or only one asked
+        after ``asked_before`` (when the user wrote the words)."""
+        if not isinstance(session_id, str) or not session_id.strip() or not isinstance(words, str) \
+                or not words.strip() or not self.path.exists():
+            return False
+        session_id = session_id.strip()
+        text = words.strip()[:MAX_WAITING_ANSWER_CHARS]
+        with self._locked() as state:
+            found = [item for item in state["waiting"] if session_id in item["session_ids"]]
+            if not found:
+                return False
+            # The newest wait is what the chat waits on: a question left from
+            # before a restart doesn't take words meant for a newer approval.
+            item = max(found, key=lambda entry: entry["at"])
+            if item["kind"] != "question" or not item["questions"] \
+                    or (asked_before is not None and item["at"] >= asked_before):
+                return False
+            filled = False
+            for entry in item["questions"]:
+                if entry["answer"] is None:
+                    entry["answer"] = text
+                    filled = True
+            # Already answered, and not taken yet: these words aren't its answer.
+            return filled
 
     def answers_ready(self, request_id: Any) -> bool:
         """Whether a call has answered every question of the clarify loop's
@@ -1262,6 +1298,10 @@ def _waiting_entry(raw: dict[str, Any], now: float) -> dict[str, Any] | None:
                                  "title": _waiting_text(raw.get("title"), MAX_WAITING_TITLE_CHARS).replace("\n", " ")}
     except (KeyError, TypeError, ValueError):
         return None
+    room = raw.get("room")
+    if isinstance(room, str) and _ROOM_ID.fullmatch(room):
+        # The group room this Hermes hosts that the wait is in.
+        entry["room"] = room
     if kind == "approval":
         description = _waiting_text(raw.get("description"), MAX_WAITING_TEXT_CHARS)
         if not description:
@@ -1332,7 +1372,9 @@ def _listed_waiting(item: dict[str, Any]) -> dict[str, Any]:
         summary, count = item["questions"][0]["question"], len(item["questions"])
     return {"id": item["id"], "kind": item["kind"], "session_ids": list(item["session_ids"]),
             "title": item["title"], "summary": " ".join(summary.split())[:MAX_WAITING_SUMMARY_CHARS],
-            "questions": count if item["kind"] == "question" else 0, "at": item["at"]}
+            "questions": count if item["kind"] == "question" else 0, "at": item["at"],
+            # A wait in a group room this Hermes hosts opens the room (hermes-conduit#2064).
+            **({"room": item["room"]} if item.get("room") else {})}
 
 
 def _public_waiting(item: dict[str, Any]) -> dict[str, Any]:

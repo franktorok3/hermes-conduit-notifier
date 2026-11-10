@@ -53,6 +53,11 @@ watch_paths:
   - tui_gateway/ws_legacy_fallback.py
   # memory_scan.py guards plugins.memory._defines_memory_provider (loaded with importlib).
   - plugins/memory/__init__.py
+  # room_start.py follows a room Hermes moves from a separate dashboard's store into the gateway's
+  # (handed_room_ids, the moved room's owner in state_meta) and names a CLI draft's owner
+  # (principal_subject), both loaded with importlib.
+  - gateway/hosted_rooms_gateway_import.py
+  - gateway/owner_identity.py
 
 # Words that make a changed hunk worth a closer look.
 keywords: [websocket, profile, plugin_api, isolation, consent, refused, ticket, session_token, x-hermes,
@@ -77,6 +82,12 @@ notes:
     New drafts and the host setup (feature map: "Linked Rooms") take ?conduit_profile=: a draft
     starts in the dashboard's session authority, which a plugin host's app lacks (there it starts
     in the legacy service), and the setup restarts the gateway as the dashboard does.
+  Linked Rooms moved into the gateway: >-
+    Hermes moves the rooms a separate `hermes dashboard` keeps in shared-state.db into the root
+    gateway's state.db when the gateway starts, at a later authority epoch (feature map: "Linked
+    Rooms"). The plugin's draft follows the room there (handed_room_ids), the gateway's process takes
+    the Links' mailbox, and guests mint grants for the new epoch. A rename there leaves a moved room's
+    guests without its new messages and its turns.
   plugin host flag: >-
     HERMES_PLUGIN_HOST_PROCESS=1 marks a plugin host. The self-update refuses there, and the
     Linked Rooms setup saves without restarting the gateway: a restart from a plugin host brings
@@ -220,6 +231,12 @@ notes:
     memory_scan.py answers False for the plugin's own folders and leaves every other to Hermes.
     upstream/test_memory_scan.py checks Hermes alone (a known failure while it parses the
     plugin) and with the plugin loaded (none of its modules parsed).
+  automation turns: >-
+    _automation_turn in __init__.py keeps a turn in a session that isn't a conversation (a script's
+    `hermes chat --source tool`, a one-shot `chat -q`/`-z`, a Kanban worker) from sending a reply or
+    failure push or starting a Live Activity (notifier#660). It reads
+    agent.session_source.session_source_for and, for a one-shot the gateway runs,
+    gateway.session_finite.finite_turn_required. upstream/test_automation_turns.py checks both.
 # Upstream behaviors we know are broken, keyed by test and failure signature.
 # A listed test xfails while it fails with this signature, and fails when it
 # passes (upstream fixed it: review the workaround) or fails differently.
@@ -266,6 +283,8 @@ imports:
     required: ["load_soul_md"]
   agent.redact:
     optional: ["redact_sensitive_text"]
+  agent.session_source:
+    optional: ["session_source_for"]
   agent.side_question:
     optional: ["_FORK_PROMPT", "answer_side_question", "trim_snapshot_for_fork"]
   agent.web_search_registry:
@@ -284,6 +303,8 @@ imports:
     optional: ["DEFAULT_GATEWAY_RESTART_AFTER_TURN_TIMEOUT", "parse_restart_after_turn_timeout"]
   gateway.session_controls:
     required: ["AuthorityConnection"]
+  gateway.session_finite:
+    optional: ["finite_turn_required"]
   gateway.status:
     optional: ["read_runtime_status", "runtime_status_is_stale"]
   gateway.warning_notifications:
@@ -395,6 +416,7 @@ module_paths:
   - agent/oneshot
   - agent/prompt_builder
   - agent/redact
+  - agent/session_source
   - agent/side_question
   - agent/web_search_registry
   - cron
@@ -404,6 +426,7 @@ module_paths:
   - gateway/response_filters
   - gateway/restart
   - gateway/session_controls
+  - gateway/session_finite
   - gateway/status
   - gateway/warning_notifications
   - hermes_cli
@@ -459,6 +482,7 @@ routes:
   - GET /boards/desktop
   - POST /boards/desktop/seen
   - GET /boards/diffs
+  - GET /boards/reviews
   - GET /boards/rooms
   - DELETE /boards/taps
   - POST /boards/taps
@@ -557,6 +581,7 @@ routes:
   - GET /qwen-live/status
   - POST /qwen-live/token
   - POST /room-files
+  - GET /room-files/data-url
   - GET /room-images
   - DELETE /room-images/{room_id}
   - GET /room-images/{room_id}

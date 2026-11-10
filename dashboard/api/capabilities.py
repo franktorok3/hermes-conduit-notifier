@@ -134,6 +134,13 @@ ROUTE_CAPABILITIES = (
     # "levels" has "next", held for the morning brief until the user turns
     # it up.
     "pulse_next",
+    # Pulse cards come from structured picks (pulse_picks): GET
+    # /pulse/feed?looks=1 gives each card "look" ({shape, facts, actions,
+    # line, detail}; shape one of date, due, runs, promise, status,
+    # steps, drawn, plain), "card_ref" ("pc_<id>"), "subject" and
+    # "updated_at"; an action that "ask"s leaves its "say" in the chat's
+    # composer. The morning brief's parts come in its "look" (shape "brief").
+    "pulse_looks",
     # Walking past (pulse_spots): a /location/ingest batch carrying
     # "spot_entries" (the watched shops the user came near, maybe none) and
     # "spots_room" gets "reply" back, sealed (spots_aad): {"spots": [{"id",
@@ -174,6 +181,16 @@ ROUTE_CAPABILITIES = (
     # answers but only to the asking device (no "[btw …]" note in Desktop).
     "side-question",
     "room-files",
+    # GET /room-files/data-url: a picture sent into a room, read back so
+    # Conduit draws it instead of its file name.
+    "room-file-pictures",
+    # The same route reads any file sent into a room (up to 16 MB), so
+    # Conduit opens and plays them as a chat does.
+    "room-file-reads",
+    # Linked Rooms carry each file sent into a room to its guests' hosts
+    # (room_files_link), and the same route reads a home's path from this
+    # host's copy, so a guest's Conduit draws a room someone else hosts too.
+    "room-files-linked",
     "room-images",
     "speech-server",
     "local-live-agent",
@@ -249,7 +266,8 @@ ROUTE_CAPABILITIES = (
     # in-app banner (Hermes is waiting on you, issue 1705).
     "waiting-list",
     # GET/POST /workstreams/settings: the bot's work settings, which Edit Bot
-    # > Work shows and changes (on or off, lookups, running at once, after a
+    # > Work shows and changes (on or off, what the Bot Chat does itself, which
+    # settings this plugin takes (`policies`), running at once, after a
     # restart, the workstreams' approvals).
     "bot-work-settings",
     # POST /workstreams/adopt: a voice call's job kept in its bot's registry,
@@ -277,6 +295,9 @@ ROUTE_CAPABILITIES = (
     # DELETE /boards/taps?id=: forgets a tap whose message Conduit didn't
     # send (Cards Hermes shows).
     "card-tap-drop",
+    # GET /boards/reviews: a review card's round with the pages its options
+    # open; its marks go as a tap with action review (Cards Hermes shows).
+    "review-cards",
 )
 
 
@@ -302,10 +323,36 @@ LOADED_VERSION = _plugin_version()
 BOOT_ID = os.urandom(8).hex()
 
 
+# A host that installs and upgrades the plugin itself (an image that bakes a
+# pinned version, a config manager) sets CONDUIT_PUSH_MANAGED: "1" (or
+# true/yes/on) for a plain "managed", or a short text naming who manages it.
+# Conduit then asks nobody to update it, and /self/update refuses.
+MANAGED_ENV = "CONDUIT_PUSH_MANAGED"
+MANAGED_BY_MAX = 80
+
+
+def managed_by() -> Optional[str]:
+    """None when the plugin isn't managed; "" for a plain managed host, or the
+    host's own name for whoever manages it (printable, at most 80 chars)."""
+    raw = (os.environ.get(MANAGED_ENV) or "").strip()
+    if not raw or raw.lower() in {"0", "false", "no", "off"}:
+        return None
+    if raw.lower() in {"1", "true", "yes", "on"}:
+        return ""
+    text = "".join(ch for ch in raw if ch.isprintable()).strip()
+    return text[:MANAGED_BY_MAX].strip()
+
+
 @router.get("/capabilities")
 async def get_capabilities(response: Response) -> Dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
     installed = _plugin_version()
-    return {"ok": True, "version": installed, "loaded_version": LOADED_VERSION,
+    body = {"ok": True, "version": installed, "loaded_version": LOADED_VERSION,
             "restart_needed": installed != LOADED_VERSION, "boot_id": BOOT_ID,
             "capabilities": list(ROUTE_CAPABILITIES)}
+    managed = managed_by()
+    if managed is not None:
+        body["managed"] = True
+        if managed:
+            body["managed_by"] = managed
+    return body

@@ -169,3 +169,223 @@ def test_a_name_that_is_not_text_falls_back_to_file():
 
 def test_a_lone_surrogate_in_a_name_is_dropped():
     assert api.rooms._room_file_name("\ud800photo.jpg") == "photo.jpg"
+
+
+_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 64
+
+
+def test_a_stored_picture_reads_back_as_a_data_url(tmp_path):
+    stored = api.rooms.store_room_file(str(tmp_path), _body(_JPEG, "photo.jpg"))
+    read = api.rooms.read_room_file_picture(str(tmp_path), stored["path"])
+    assert read["dataUrl"] == "data:image/jpeg;base64," + base64.b64encode(_JPEG).decode()
+    assert read["size"] == len(_JPEG)
+
+
+def test_picture_types_come_from_the_bytes_not_the_name(tmp_path):
+    import pytest
+
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    webp = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 16
+    heic = b"\x00\x00\x00\x18ftypheic" + b"\x00" * 16
+    heif = b"\x00\x00\x00\x18ftypmif1" + b"\x00" * 16
+    avif = b"\x00\x00\x00\x1cftypavif" + b"\x00" * 16
+    avif_in_mif1 = b"\x00\x00\x00\x20ftypmif1\x00\x00\x00\x00mif1avifmiaf" + b"\x00" * 8
+    for data, mime in ((png, "image/png"), (webp, "image/webp"), (heic, "image/heic"), (heif, "image/heic"),
+                       (avif, "image/avif"), (avif_in_mif1, "image/avif"), (b"GIF89a....", "image/gif")):
+        stored = api.rooms.store_room_file(str(tmp_path), _body(data, "picture.txt"))
+        assert api.rooms.read_room_file_picture(str(tmp_path), stored["path"])["dataUrl"].startswith(f"data:{mime};base64,")
+    # A name claiming a picture its bytes aren't is no picture type.
+    text = api.rooms.store_room_file(str(tmp_path), _body(b"<svg onload=x>", "photo.jpg"))
+    assert api.rooms.read_room_file_picture(str(tmp_path), text["path"])["dataUrl"].startswith(
+        "data:application/octet-stream;base64,")
+
+
+def test_any_other_file_reads_back_typed_by_its_name(tmp_path):
+    for name, data, mime in (
+        ("report.pdf", b"%PDF-1.7 ...", "application/pdf"),
+        ("pasted_content_1.txt", "Hé, long paste".encode(), "text/plain"),
+        # The host's own table can name audio differently; it's still audio.
+        ("clip.m4a", b"\x00\x00\x00\x20ftypM4A ", __import__("mimetypes").guess_type("clip.m4a")[0] or "application/octet-stream"),
+        ("notes", b"no extension", "application/octet-stream"),
+        # A page or script opens as a file, never runs in a viewer.
+        ("page.html", b"<script>alert(1)</script>", "application/octet-stream"),
+        ("feed.xml", b"<?xml version='1.0'?><a/>", "application/octet-stream"),
+        ("backup.tar.gz", b"\x1f\x8b\x08\x00", "application/octet-stream"),
+    ):
+        stored = api.rooms.store_room_file(str(tmp_path), _body(data, name))
+        read = api.rooms.read_room_file_picture(str(tmp_path), stored["path"])
+        assert read["dataUrl"] == f"data:{mime};base64," + base64.b64encode(data).decode(), name
+
+
+def test_only_stored_room_files_are_read(tmp_path):
+    import pytest
+
+    root = tmp_path / "room-files"
+    stored = api.rooms.store_room_file(str(root), _body(_JPEG))
+    outside = tmp_path / "secret.jpg"
+    outside.write_bytes(_JPEG)
+    (root / "loose.jpg").write_bytes(_JPEG)
+    folder = pathlib.Path(stored["path"]).parent
+    (folder / "link.jpg").symlink_to(outside)
+    cases = {
+        str(outside): 404,
+        str(root / "loose.jpg"): 404,
+        str(folder / ".." / ".." / "secret.jpg"): 404,
+        str(folder / "link.jpg"): 404,
+        str(folder): 404,
+        str(folder / "gone.jpg"): 404,
+        "relative/photo.jpg": 400,
+        "": 400,
+        None: 400,
+    }
+    for path, status in cases.items():
+        with pytest.raises(api.rooms.HTTPException) as refused:
+            api.rooms.read_room_file_picture(str(root), path)
+        assert refused.value.status_code == status, path
+
+
+def test_a_room_file_another_host_stored_reads_this_hosts_copy(tmp_path):
+    import pytest
+
+    # A guest's phone names the home's path; Linked Rooms keep the copy in
+    # the guest's root home under the same folder and name.
+    profile = tmp_path / "profile" / "conduit" / "room-files"
+    carried = tmp_path / "root" / "conduit" / "room-files"
+    folder = "20261108-" + "c" * 32
+    (carried / folder).mkdir(parents=True)
+    (carried / folder / "shot one.jpg").write_bytes(_JPEG)
+    outside = tmp_path / "secret.jpg"
+    outside.write_bytes(_JPEG)
+    (carried / folder / "link.jpg").symlink_to(outside)
+    home = f"/home/furina/.hermes/conduit/room-files/{folder}"
+
+    read = api.rooms.read_room_file_picture(str(profile), f"{home}/shot one.jpg", [str(carried)])
+    assert read["dataUrl"].startswith("data:image/jpeg;base64,")
+    refused = {
+        f"{home}/link.jpg": 404,  # a copy that leads out isn't one
+        f"{home}/gone.jpg": 404,
+        f"/home/furina/.hermes/conduit/room-files/not-a-folder/shot one.jpg": 404,
+        f"/home/furina/.hermes/other/{folder}/shot one.jpg": 404,
+        f"{home}/..": 404,
+    }
+    for path, status in refused.items():
+        with pytest.raises(api.rooms.HTTPException) as error:
+            api.rooms.read_room_file_picture(str(profile), path, [str(carried)])
+        assert error.value.status_code == status, path
+    # The home's path naming a profile's root here, where the file isn't, reads the copy (Greptile on #629).
+    (profile / folder).mkdir(parents=True)
+    same = str(profile / folder / "shot one.jpg")
+    assert api.rooms.read_room_file_picture(str(profile), same, [str(carried)])["dataUrl"]
+    # A Windows home's path reads the copy too (DeepSeek on notifier #629).
+    windows = f"C:\\Users\\furina\\.hermes\\conduit\\room-files\\{folder}\\shot one.jpg"
+    assert api.rooms.read_room_file_picture(str(profile), windows, [str(carried)])["dataUrl"]
+    # A Windows home on a network share reads the copy too (DeepSeek on notifier #629).
+    share = f"\\\\fileserver\\users\\furina\\.hermes\\conduit\\room-files\\{folder}\\shot one.jpg"
+    assert api.rooms.read_room_file_picture(str(profile), share, [str(carried)])["dataUrl"]
+    # And a POSIX home's path is one on a Windows host, where it isn't absolute (DeepSeek on notifier #629).
+    assert api.rooms._ANY_ABSOLUTE.match(f"/home/furina/.hermes/conduit/room-files/{folder}/shot one.jpg")
+    assert not api.rooms._ANY_ABSOLUTE.match(f"conduit/room-files/{folder}/shot one.jpg")
+    # Without the carried root, another host's path is no file here.
+    with pytest.raises(api.rooms.HTTPException):
+        api.rooms.read_room_file_picture(str(profile), f"{home}/shot one.jpg")
+
+
+def test_a_picture_too_large_for_a_data_url_is_refused(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(api.rooms, "ROOM_FILE_PICTURE_MAX_BYTES", 32)
+    stored = api.rooms.store_room_file(str(tmp_path), _body(_JPEG))
+    with pytest.raises(api.rooms.HTTPException) as refused:
+        api.rooms.read_room_file_picture(str(tmp_path), stored["path"])
+    assert refused.value.status_code == 413
+
+
+def test_the_route_reads_from_the_hermes_home(tmp_path, monkeypatch):
+    root = tmp_path / "conduit" / "room-files"
+    monkeypatch.setattr(api.rooms, "_room_files_root", lambda: str(root))
+    app = FastAPI()
+    app.include_router(api.router, prefix=BASE)
+    client = TestClient(app)
+    path = client.post(f"{BASE}/room-files", json=_body(_JPEG)).json()["path"]
+    response = client.get(f"{BASE}/room-files/data-url", params={"path": path})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["dataUrl"].startswith("data:image/jpeg;base64,")
+    missing = client.get(f"{BASE}/room-files/data-url", params={"path": str(tmp_path / "x.jpg")})
+    assert missing.status_code == 404
+    assert missing.headers["cache-control"] == "no-store"
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs here")
+def test_a_fifo_in_an_upload_folder_is_turned_away_without_hanging(tmp_path):
+    import pytest
+
+    stored = api.rooms.store_room_file(str(tmp_path), _body(_JPEG))
+    fifo = pathlib.Path(stored["path"]).parent / "pipe.jpg"
+    os.mkfifo(fifo)
+    with pytest.raises(api.rooms.HTTPException) as refused:
+        api.rooms.read_room_file_picture(str(tmp_path), str(fifo))
+    assert refused.value.status_code == 404
+
+
+def test_picture_reads_are_rate_limited(tmp_path, monkeypatch):
+    monkeypatch.setattr(api.rooms, "_room_files_root", lambda: str(tmp_path))
+    monkeypatch.setattr(api.rooms, "_room_file_picture_limiter", api.core._MintLimiter(1, 60.0))
+    app = FastAPI()
+    app.include_router(api.router, prefix=BASE)
+    client = TestClient(app)
+    path = api.rooms.store_room_file(str(tmp_path), _body(_JPEG))["path"]
+    assert client.get(f"{BASE}/room-files/data-url", params={"path": path}).status_code == 200
+    limited = client.get(f"{BASE}/room-files/data-url", params={"path": path})
+    assert limited.status_code == 429
+    assert limited.headers["cache-control"] == "no-store"
+
+
+def test_an_upload_waits_on_the_disk_lock_carried_room_files_take(tmp_path):
+    # DeepSeek on notifier #629: uploads and carried files checked the free floor under different locks.
+    import threading
+
+    files_link = api.core._plugin_package_module("room_files_link")
+    lock_path = str(tmp_path / "conduit" / files_link.LOCK_NAME)
+    done = threading.Event()
+
+    def upload():
+        api.rooms.store_room_file(str(tmp_path / "conduit" / "room-files"), _body(b"x"), lock_path=lock_path)
+        done.set()
+
+    with files_link.disk_lock(tmp_path):
+        worker = threading.Thread(target=upload)
+        worker.start()
+        assert not done.wait(0.3), "the upload went on while the carried file held the lock"
+    worker.join(5)
+    assert done.is_set()
+
+
+def test_a_room_file_uploaded_under_another_profile_reads_too(tmp_path, monkeypatch):
+    # DeepSeek on notifier #629: the home's own Conduit couldn't read an upload made under another profile.
+    import types
+
+    root = tmp_path / "root"
+    monkeypatch.setattr(api.core, "_calls_home", lambda: root / "profiles" / "default")
+    real = api.core._plugin_package_module
+
+    def package(name):
+        if name == "room_identity":
+            return types.SimpleNamespace(root_home=lambda home: root)
+        return real(name)
+
+    monkeypatch.setattr(api.core, "_plugin_package_module", package)
+    folder = "20261108-" + "e" * 32
+    upload = root / "profiles" / "work" / "conduit" / "room-files" / folder / "shot.jpg"
+    upload.parent.mkdir(parents=True)
+    upload.write_bytes(_JPEG)
+    active = root / "profiles" / "default" / "conduit" / "room-files"
+    active.mkdir(parents=True)
+
+    carried = api.rooms._carried_room_files()
+
+    assert str(root / "conduit" / "room-files") == carried[0]
+    assert api.rooms.read_room_file_picture(str(active), str(upload), carried)["dataUrl"]

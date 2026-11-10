@@ -483,6 +483,42 @@ def test_talk_only_blocks_every_tool_in_a_room_turn(host, session_id, room_id):
 
 
 @pytest.mark.parametrize("session_id, room_id", [("s-home", "room-b"), (REMOTE, "room-a")])
+def test_every_tier_may_look_at_a_picture_sent_into_the_room(host, session_id, room_id, tmp_path):
+    # Every agent in the room sees what was sent to all of them (Eric 2026-11-08): Talk only and
+    # Nothing personal included, but only a file under this host's room-files root.
+    picture = host / "conduit" / "room-files" / "20261108-abc" / "shot.jpg"
+    picture.parent.mkdir(parents=True)
+    picture.write_bytes(b"\xff\xd8")
+    elsewhere = tmp_path / "secret.jpg"
+    elsewhere.write_bytes(b"\xff\xd8")
+    sneaky = picture.parent / "link.jpg"
+    sneaky.symlink_to(elsewhere)
+
+    def look(url):
+        return plugin._pre_tool_call(session_id=session_id, tool_name="vision_analyze",
+                                     args={"image_url": url, "question": "what is it?"}, turn_id="t1")
+
+    for share in ("ask", "nothing"):
+        _choose(host, room_id, share=share)
+        assert look(str(picture)) is None
+        for url in (str(elsewhere), str(sneaky), f"{picture.parent}/../../../../secret.jpg", "https://x.test/a.jpg",
+                    "shot.jpg", str(picture.parent / "gone.jpg"), ""):
+            assert _blocked(look(url)), url
+    # Through Tool Search's bridge too, by the arguments it carries.
+    bridged = plugin._pre_tool_call(session_id=session_id, tool_name="tool_call", turn_id="t1", args={
+        "name": "vision_analyze", "arguments": json.dumps({"image_url": str(picture), "question": "?"})})
+    assert bridged is None
+    # One uploaded under another profile too, as Linked Rooms carries it (GLM on notifier #629).
+    other = host / "profiles" / "work" / "conduit" / "room-files" / "20261108-abc" / "plan.png"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"\x89PNG")
+    assert look(str(other)) is None
+    assert "vision_analyze, by the path its message names" in _context(session_id)
+    _choose(host, room_id, tools="look")
+    assert rules.ROOM_PICTURES_LINE not in _context(session_id)
+
+
+@pytest.mark.parametrize("session_id, room_id", [("s-home", "room-b"), (REMOTE, "room-a")])
 def test_look_things_up_allows_web_tools_only(host, session_id, room_id):
     _choose(host, room_id, tools="look")
     for tool_name in ("web_search", "web_extract", "x_search", "vision_analyze"):
@@ -778,6 +814,9 @@ def test_room_turn_framing_says_who_is_asking_and_not_to_answer_for_others(host,
     home = _context("s-home")
     assert "@laifu" in home and "the user in this room is your owner" in home.lower()
     assert "Answer only for yourself" in home
+    # A bot the user @mentioned answers alone: it doesn't tag another in (Eric 2026-11-08).
+    for told in (member, home):
+        assert "don't @mention another participant in your reply unless the user asked for them" in told
     # Talk only, Ask me first and no past-chat search, said so the agent doesn't try.
     assert rules.TALK_ASK_LINE in home and "check with your owner" in home and "nothing is saved" in home.lower()
 
@@ -1152,3 +1191,24 @@ def test_a_rooms_private_chat_is_told_its_room(host, notes):
     context = _context("s-chat")
     assert "This chat is about a room your owner shares" in context and "room-a" in context
     assert "This chat is about a room your owner shares" not in _context("s-home")
+
+
+def test_a_hosted_rooms_name_titles_its_pushes(tmp_path):
+    # hermes-conduit#2064: a reply push is titled with the room, not "Group: <room id>".
+    home = tmp_path / "hermes" / "profiles" / "furina"
+    root = tmp_path / "hermes"
+    _room(root / "state.db", "room-b", [FURINA, LAIFU])
+    conn = sqlite3.connect(root / "state.db")
+    conn.execute("UPDATE hosted_rooms SET name = '  Zoo trip ' WHERE room_id = 'room-b'")
+    conn.commit()
+    conn.close()
+    assert rules.room_name("room-b", home) == "Zoo trip", "found in the root's store from a profile"
+    assert rules.room_name("room-x", home) == ""
+    assert rules.room_name("", home) == ""
+    # A store of another shape, or one that can't be read, names nothing.
+    (root / "state.db").write_bytes(b"this is not a database" * 64)
+    legacy = sqlite3.connect(root / "shared-state.db")
+    legacy.execute("CREATE TABLE hosted_rooms (room_id TEXT PRIMARY KEY)")
+    legacy.commit()
+    legacy.close()
+    assert rules.room_name("room-b", home) == ""

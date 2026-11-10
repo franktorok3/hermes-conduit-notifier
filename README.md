@@ -59,6 +59,20 @@ create --clone` copies the plugins folder) is moved to the profile's
 install, which leaves the profile alone. Where the host can't make a link,
 the main install is copied in instead and replaced at the next update.
 
+### A host that manages the plugin (plugin 0.146.0+)
+
+When something other than Conduit installs and upgrades the plugin (an image
+that bakes a pinned version, a configuration manager), set
+`CONDUIT_PUSH_MANAGED` in the dashboard's environment: `1` (or `true`, `yes`, `on`)
+for a plain "managed", or a short text naming who manages it, such as
+`CONDUIT_PUSH_MANAGED="Family farm"`. The capabilities route then reports
+`"managed": true` (and `"managed_by"` for a text), Conduit asks nobody to
+update the plugin on that host and says who keeps it up to date, and
+`POST /self/update` pulls nothing: it answers 409, or, when the copy the host
+put on disk waits for its restart (plugin 0.147.2+), runs only the gateway's
+and the dashboard's restarts, as an update would. Leave it unset (or `0`) for
+a plugin you update from Conduit.
+
 Pairing codes expire after ten minutes and can only be claimed once.
 
 With plugin 0.24+ Conduit pairs the active dashboard's profile by itself: it
@@ -122,7 +136,9 @@ The plugin currently emits notifications for:
 - completed background tasks: a delegated task that ends while the turn that started it is still running is part of that turn's reply and sends nothing of its own (plugin 0.35+)
 - calendar and reminder changes Hermes asks your phone to make (see [Calendar, Reminders, Focus and phone status](#calendar-reminders-focus-and-phone-status-from-conduit-plugin-027)): a notification to approve, or a silent wake for adds you let Hermes make without asking
 - call requests: a job you asked to be called about has ended, Hermes asked to call you, or (alert calls) Hermes has waited a minute on your approval or answer, or a turn failed (see [Hermes calls you](#hermes-calls-you-plugin-013))
-- room invites, to a Conduit that shows them: someone you've linked invited you to a room (plugin 0.105+, relay 0.21+; see [Rooms with people you've linked](#rooms-with-people-youve-linked-plugin-089)). Your agents' turns in a room someone else hosts send no reply or failure notification, since the room shows them.
+- room invites, to a Conduit that shows them: someone you've linked invited you to a room (plugin 0.105+, relay 0.21+; see [Rooms with people you've linked](#rooms-with-people-youve-linked-plugin-089)). Your agents' turns in a room someone else hosts send no reply or failure notification, since the room shows them. In a room this Hermes hosts, a turn's reply, failure, finished background task and approval open the room, titled with its name, not the bot's hidden chat there (plugin 0.150.1+), and a lead's pick of who answers sends nothing.
+
+A turn in a session Hermes doesn't list as a conversation sends no reply, failure or background-task notification and shows no Lock Screen progress (plugin 0.153.7+): a script's `hermes chat --source tool`, a one-shot `hermes chat -q` or `-z`, and a Kanban worker. Their answers go to whoever ran them, and Conduit's chat lists hide those sessions. An approval or question from one still notifies, and so do a call you asked for and a notification the run wrote with `conduit_notify`.
 
 A fork of a chat never notifies as the chat (plugin 0.119.1+): Conduit's predictions (`/predict`), a step summary's `/btw` and the self-improvement review each answer from a fork that runs under the chat's session id, and on a Hermes that runs plugin hooks for forks (0.21 among them) the plugin keeps the fork's answer from going out as a reply and off the chat's Live Activity. An exact `[Silent]` assistant response does not emit a completion notification. Reply and task bodies are sent as plain text: Markdown fences, emphasis, headings, link targets and table rules are dropped (plugin 0.35+). No notification shows a file's path on the host (plugin 0.71.2+): a `MEDIA:` tag in a reply, a question, an approval, a call or a phone change, and in the answer card or call screen that comes with it, reads as 📎 and the file's name, or its type (`📎 PPTX`) when the name is only a hash, and `[[audio_as_voice]]` and `[[as_document]]` are dropped. A Hermes Desktop directive reads the same way (plugin 0.120.4+): a page shown with `::preview{file="…"}` as its file, and a Desktop plugin's card, such as hermes-rich-ui's `::richui{id="…"}`, as `🗂 hermes-rich-ui card`. Code in a reply's fenced block stays as written.
 
@@ -1139,6 +1155,13 @@ bridge alike:
 - Each finished transcription (`conversation.item.input_audio_transcription.completed`)
   starts the call's turn, as the model address would. The readiness check's
   marker and a typed turn do too, so neither is read aloud.
+- In agent mode (below) the call's fast model answers that turn instead of
+  Hermes, exactly as on the model address: its words are read back the same
+  way, its tool calls go to Conduit, and talking over it stops it. The
+  readiness check stays Conduit's own turn, and with no fast model set, or
+  one that fails before saying anything, the words go to Hermes after the
+  "isn't answering" line (plugin 0.151.0). The Watch's bridge has no agent
+  mode, so it keeps one Hermes turn per utterance.
 - The reply, as it streams, goes back in sentences, one read-back
   `response.create` (inline input) per sentence, one at a time. The first
   sentence goes as soon as it ends; later ones join until they're 40
@@ -1220,6 +1243,9 @@ How a call runs:
 - The readiness check is still answered by Conduit. With no fast model set,
   or with one that fails before saying anything, the utterance goes to
   Hermes as a turn instead.
+- On a read-back speech server (above), which never asks for replies
+  itself, the plugin asks the fast model for each transcription on the
+  relay, with the same tools, history and fallback (plugin 0.151.0).
 
 An engine that runs its own fast model (Pipecat behind the relay, say) uses
 the same tools with the Local Live key:
@@ -1406,20 +1432,23 @@ call ends without them too (the log says so each time). A call that isn't saved
 A bot's Bot Chat can coordinate work sessions of its own: you ask Furina for
 something, she starts a workstream (a hidden chat on her own profile) and stays
 free to talk while it runs, and its result comes back to her as a work update
-she tells you about. It's on for every bot until you turn it off, and she may
-also look things up herself (lookups), so a quick question doesn't start a
-workstream. Change it in Conduit (Edit Bot > Work) or here:
+she tells you about. It's on for every bot until you turn it off, and she does
+quick things herself (lookups, Conduit's "Quick Things Here"), so a quick
+question or a small task doesn't start a workstream. Change it in Conduit
+(Edit Bot > Work) or here:
 
     hermes -p <bot> conduit-push work off
-    hermes -p <bot> conduit-push work on            # lookups: she may also look things up
+    hermes -p <bot> conduit-push work on            # lookups: she does quick things herself
+    hermes -p <bot> conduit-push work on --policy open      # she does everything herself
     hermes -p <bot> conduit-push work on --policy strict    # she only coordinates
     hermes -p <bot> conduit-push work on --after-restart ask  # after a restart, ask before continuing
     hermes -p <bot> conduit-push work on --approvals ask    # workstreams ask before what can't be undone
+    hermes -p <bot> conduit-push work on --coordination auto   # she keeps her workstreams in step on her own
     hermes -p <bot> conduit-push work on --model anthropic:claude-sonnet-5-5   # new workstreams' model (bot: her own)
     hermes -p <bot> conduit-push work status
 
 - The Bot Chat gets `work_list`, `work_start`, `work_send`, `work_stop`,
-  `work_read`, `work_close`, `work_note`, `work_ask` and `work_reply` (behind
+  `work_read`, `work_close`, `work_note`, `work_propose`, `work_ask` and `work_reply` (behind
   Hermes' Tool Search). They answer in that bot's canonical Bot Chat, and
   name work by ref (W1, W2 for workstreams, A1, A2 for asks), never by session
   id, so a bot only ever reaches its own work.
@@ -1518,15 +1547,58 @@ workstream. Change it in Conduit (Edit Bot > Work) or here:
   plugin turned it off in, so a turn you start there yourself asks too. A
   resolved workstream, or a change made with `--approvals`, turns back at
   its next turn through Conduit.
-- Strict leaves the coordinator the work tools, `clarify`, `memory` and
-  `conduit_show` (its cards are its own: a workstream's would show in the
-  workstream's chat, not the Bot Chat);
-  lookups adds read-only lookups (past chats, web search, skills, Conduit's
-  health, location and inbox). `message_agent` is refused there in favour of
-  `work_ask`.
+- The Bot Chat keeps its workstreams working together (plugin 0.154+). The
+  plugin keeps a ledger of what happens in each one, with who said it: what
+  a worker reports with `work_progress` (`found`, `assumes`, `changed`), what
+  you write in a workstream's own chat, how each turn ended, and what the Bot
+  Chat sent and whether it arrived. Each of her turns gets that as a board in
+  her note, so when W2 finds something that breaks what W1 relies on, she can
+  act before you tell her. A work update she has nothing to tell you about
+  she answers with `[SILENT]`, and you see nothing. Coordination (Edit Bot >
+  Work, or `--coordination`) sets how independently she acts in the turns
+  she starts herself, a work update's: `ask` (the default) lets her pass
+  information on and ask a workstream to check something, and has her ask
+  you before she starts, stops or redirects work (the plugin refuses those
+  in such a turn, and adds her words to a running turn without
+  interrupting it); `auto` lets her do those on her own and tell you in a
+  line; `off` is the Bot Chat as it was, passing reports on. When you write
+  to her, she acts on your message under any setting. What she asks you and
+  what you answer is kept with `work_propose`, so she doesn't ask twice. A
+  workstream you set to Leave alone (its card in Conduit) gets nothing from
+  her and isn't stopped by her in a turn you didn't start. Past eight
+  messages to one workstream in an hour from such turns, the next is refused
+  and she tells you. None of this changes what Hermes lets a workstream's
+  tools do: approvals, dangerous-command rules and `/yolo` stay as you set
+  them.
+- What the Bot Chat does itself is decided by how long the work runs, not by
+  which tool it uses. Under every setting it keeps its own tools: the work
+  tools, `memory` and the memory provider's, and what shows you something or
+  asks you, which shows only in the chat that calls it: `clarify`,
+  `conduit_notify`, its cards (`conduit_show`; a review card of a workstream's options goes with
+  `for` set to it, and the user's marks go to it), Apple Maps (`conduit_maps`,
+  navigate's Go button included) and the password vault's unlock, save-login
+  and code prompts (`browser_vault`). Strict ("Only Coordinates") leaves it
+  only those. Lookups ("Quick Things Here") also runs any other tool, reads
+  and changes alike, under the bot's usual approvals, for 5 steps of a turn
+  or a minute after the turn's first; the step after that is refused with a
+  note to start a workstream with what it found so far, and `delegate_task`
+  always goes to a workstream. Open ("Everything Here") runs everything in
+  the Bot Chat and starts workstreams when it judges the work long or you ask.
+  Calls through `tool_call` count by what they call. `message_agent` is
+  refused there in favour of `work_ask`.
 - A workstream writes its report for you, in its own chat, which you can open
   and answer. The Bot Chat's update carries a short line of it and the chat's
   link (`work_read` gives the coordinator up to 2,000 characters of it).
+  When the workstream's turn showed cards in its chat (a map, a forecast),
+  the update says so, and the coordinator shows the same cards in the Bot
+  Chat with `conduit_show {"from_work": "W3"}`. When its report names two
+  or more pages or pictures, the plugin builds a review card of them (one
+  option per file, labelled from the file's name) and the same short call
+  shows it. A model that writes a `conduit_show` call out as text in its
+  reply instead of making it (weak models do, since Hermes puts a plugin's
+  tools behind its tool-search bridge) still gets its card: the plugin
+  shows the call itself and leaves the board's line in the reply, which
+  Conduit draws. One whose text names that review's files shows the review.
   A workstream keeps a checklist with `work_progress` (its only work
   tool), which the Bot Chat's digest shows, Conduit's Work panel lists, and
   Conduit shows as the Tasks line in the workstream's own chat. The
@@ -1553,6 +1625,12 @@ workstream. Change it in Conduit (Edit Bot > Work) or here:
   screen one tap away.
 - A workstream's turn sends no push of its own: the Bot Chat's reply about it
   is the one push. Its approvals and questions still come from the workstream.
+  You answer an approval in the workstream's chat or on its card. A question
+  you can also answer from the reply field on its card, or in the Bot Chat:
+  the bot passes your answer on with `work_send`, and that answers the
+  question rather than waiting behind it. Only a Bot Chat turn your own
+  message started, written after the question came, passes one on, so the bot never answers it alone, and
+  what a group room says never does.
 - Up to 2 run at once per bot (`--max-running`). The registry is
   `<profile>/conduit/workstreams.db`, with a journal of each workstream's
   tool steps and an outbox of every turn sent into a chat.
@@ -1591,8 +1669,8 @@ its next digest. A secondary bot is named with `?conduit_profile=`.
 | POST | `/api/plugins/conduit_push/workstreams/<ref>/stop`, `/continue` or `/check` | `{ok, work}` |
 | POST | `/api/plugins/conduit_push/workstreams/<ref>/pin`, `/unpin`, `/resolve` or `/reopen` | `{ok, work}` |
 | POST | `/api/plugins/conduit_push/workstreams/<ref>/approve` or `/deny` with `{request_id}` | `{ok, work}` |
-| GET | `/api/plugins/conduit_push/workstreams/settings` | `{ok, policy, max_running, max_running_limit, after_restart, workstream_approvals, chat_approvals, unavailable}` |
-| POST | `/api/plugins/conduit_push/workstreams/settings` with any of `{policy, max_running, after_restart, workstream_approvals}` | the settings as they are now |
+| GET | `/api/plugins/conduit_push/workstreams/settings` | `{ok, policy, policies, max_running, max_running_limit, after_restart, workstream_approvals, chat_approvals, workstream_model, unavailable}` (`policy`: off, strict, lookups or open; `policies`: the ones this plugin takes) |
+| POST | `/api/plugins/conduit_push/workstreams/settings` with any of `{policy, max_running, after_restart, workstream_approvals, workstream_model}` | the settings as they are now |
 | POST | `/api/plugins/conduit_push/workstreams/adopt` with `{session_id, title, via, goal?, chat?, result?}` (`via`: `phone` or `watch`; `result`: the reply of a turn that ended before the phone kept it, which settles the row; `chat`: the chat the call is kept with, so the Bot Chat's makes it the coordinator's workstream, `call` on its row; `call`: the call's own id) | `{ok, ref, adopted, work}`; the same call's session again answers with its row, `adopted` false; `taken` (409) for one of the bot's own workstreams' sessions; `invalid` (400) when `session_id`, `title`, `goal`, `chat` or `result` isn't text; `off` (409) when the bot's workstreams are off |
 | POST | `/api/plugins/conduit_push/workstreams/call-ended` with `{chat, call?}` (a call kept with that chat ended, in any voice mode) | `{ok, bot_chat}`; `bot_chat` is true when the chat is the Bot Chat, whose held updates go 15 s later when the hold is this call's (`call`, the id its adopts named); 400 without `chat` |
 
@@ -1962,6 +2040,30 @@ sooner, oldest first, once they pass 2 GB together (checked hourly). An
 upload that would leave under 1 GB free on the host is refused (507).
 Capability `room-files`.
 
+Conduit draws a picture sent into a room as the picture, and opens or plays
+any other file sent there, as in a chat.
+`GET /api/plugins/conduit_push/room-files/data-url?path=…` returns one as
+`{"dataUrl": "data:…;base64,…"}`, as Hermes' `/api/fs/read-data-url` does,
+which hosted and locked installs refuse outside their files folder. It reads
+only files `/room-files` stored (404 otherwise), up to 16 MB (413). A
+picture's type comes from its bytes (JPEG, PNG, GIF, WebP, HEIC, AVIF); any
+other file's from its name, never a picture type the bytes don't back.
+Capabilities `room-file-pictures` (plugin 0.142+, pictures) and
+`room-file-reads` (0.143+, any file).
+
+In a Linked Room (plugin 0.149+), every participant sees the same files.
+The home sends each file a room message names, up to 16 MB, over the Link
+to every guest with an agent in the room, in 96 KB pieces, sending it again
+(up to five times) until the guest says it has the file. The guest's plugin checks its size and
+SHA-256 and keeps it in its root home under the same
+`conduit/room-files/<id>/<name>`, readable by its own user only. A turn for
+the guest's agent names that copy instead of the home's path (waiting up to
+8 seconds for one still on its way), and `/room-files/data-url` reads a
+home's path from it, so the guest's Conduit draws the room's pictures too.
+A guest keeps which home each upload folder belongs to (the first whose room pages name it, or whose file arrives first) and which Link sent each file: it refuses another home's bytes under that folder, and a turn names only a copy its own room's home sent. Pieces of files that never finish go after a day, swept hourly too. Carried files count toward the guest's 2 GB of room files, at most 20,000 of them (past that the oldest go first), and age out after 30 days, oldest first past the 2 GB, swept hourly by the rooms loop as well as on each arrival; none is kept with under 1 GB free, and uploads and carried files check the disk under one lock (`conduit/room-files.lock` in the root home). Capability `room-files-linked`. A file over 16 MB stays on the home's host.
+In a room with other people's agents, every rule tier may call
+`vision_analyze` on a picture sent into the room, by its room-files path.
+
 ## Group pictures (plugin 0.41+)
 
 Hermes' gateway-hosted group rooms carry no picture, so Conduit keeps a
@@ -1995,6 +2097,28 @@ methods the plugin guards, the plugin guards the rest and logs a warning
 naming what's missing. If Hermes' session store (`state.db`) can't be read
 when the plugin needs it to tell whether a session is a room, the plugin logs
 a warning and treats that session as an ordinary chat.
+
+## Pulse and memory providers (plugin 0.147.1+)
+
+Pulse's reports, morning briefs, follow-ups and delivery checks are hidden
+turns in the Pulse chat, and a report carries everything Pulse gathered for
+it, often tens of thousands of characters that mostly repeat the last one.
+Hermes would hand each of those turns to the profile's external memory
+provider like a message of yours: saved after the turn, recalled against
+before it, and read again with the whole chat when the chat ends or is
+compacted. A provider that reprocesses a session each time something is
+added (Hindsight) then spent dollars a day on the Pulse chat alone
+(notifier #633). Pulse keeps its own memory, so the plugin keeps its turns
+from the provider: for a Pulse turn there's no save, no recall and no turn
+count, and the chat's end and its compaction hand the provider the chat with
+Pulse's turns (each ask and its reply) left out. What you write in the Pulse
+chat yourself is saved and recalled as in any chat, and the turn after a
+Pulse turn doesn't hand the provider Pulse's ask as your last message
+(plugin 0.153.4+, notifier #652). A turn counts as Pulse's
+when it holds the whole text Pulse sent from this profile (its store,
+`conduit-pulse.db`, says), so quoting a Pulse tag doesn't make your message
+Pulse's. If that store can't be read, the turn goes to the provider as
+Hermes sends it.
 
 ## Long group room threads (plugin 0.77.6+)
 
@@ -2166,12 +2290,14 @@ and the dashboard routes under one file lock, so they survive restarts:
 | POST | `/api/plugins/conduit_push/calls/outcomes?profile=` (0.15+) | `{call_id, session_ids: [...], outcome: "declined" or "missed", kind?, title?, reason?, age_s?}` | `{ok, status: "recorded"}` |
 | GET | `/api/plugins/conduit_push/calls/waiting?session_id=&profile=` (0.70+) | | `{ok, waiting}`: null, `{kind: "question", questions: [{number, question, choices, multi_select, answered, may_leave_blank}]}` (`may_leave_blank` 0.82+) or `{kind: "approval", description, command, command_cut, answered}` |
 | POST | `/api/plugins/conduit_push/calls/waiting/answer?profile=` (0.70+) | `{session_id, answer?, question?, choice?, reason?}` | `{ok, status: "answered", ...}`, `{ok, status: "not_waiting"}`, `{ok, status: "refused", message}`, or for an approval Hermes didn't take (0.70.1+) `{ok, status: "too_late" or "failed" or "unconfirmed", message}` |
-| GET | `/api/plugins/conduit_push/waiting?profile=` (0.131+) | | `{ok, waiting: [{id, kind: "approval" or "question", session_ids, title, summary, questions, at}]}`, newest first |
+| GET | `/api/plugins/conduit_push/waiting?profile=` (0.131+) | | `{ok, waiting: [{id, kind: "approval" or "question", session_ids, title, summary, questions, at, room?}]}`, newest first (`room` 0.150.1+) |
 
 - Every chat Hermes waits on the user in is listed by `/waiting` (0.131+),
   one profile at a time, for Conduit's Needs you list, the counts on its
   profile strip and its banner: the chat's ids and title, an approval's
-  description or a batch's first question, and when it began. Never a
+  description or a batch's first question, and when it began. A wait in a
+  group room this Hermes hosts also names the room's id (`room`, 0.150.1+),
+  so its row opens the room, where its card is answered. Never a
   command, never a bot's workstreams (their Work panel shows them), and a
   wait goes once it's answered anywhere or Hermes gave up on it. The list
   only reads; an approval is answered on its chat's card.
@@ -2537,9 +2663,10 @@ keep only that field.
 - **Only where they're drawn.** A Conduit says `info-cards` in its
   exchange's `features` when it draws them. Unless every Conduit that
   draws cards (`show-cards` or `chat-cards`) and exchanged with the profile
-  in the last 3 days says it (30 days before plugin 0.130), the tool leaves them out (`unsupported_cards`
-  when nothing else is left): the chat keeps the cards, and an older build
-  opening it would show them as nothing. Each phone's exchange
+  in the last 3 days on the newest Conduit build among them says it (30 days
+  before plugin 0.130; every build before 0.152), the tool leaves them out
+  (`unsupported_cards` when nothing else is left). An older build that
+  opens the chat shows those cards as nothing until it updates. Each phone's exchange
   also leaves out the cards it can't draw and shows the Markdown instead.
 
 ### Media, contact and live cards (plugin 0.47+)
@@ -2669,6 +2796,43 @@ Conduit owns the fonts, colors and spacing. There is no HTML or script.
   draws them. Until every Conduit that draws cards does, composed cards are
   left out and buttons and fields are taken off other cards, and Hermes is
   told to offer them in its reply.
+
+### Review cards (plugin 0.147+)
+
+A `review` card shows options to choose between when they're easier to see
+than to describe: layouts, colours, charts, posters, a before and after.
+It's a mockup review in the chat, not a code review.
+
+- **Input** (`inputs.review`): `decisions`, up to six, each a `title`, a
+  line of `text`, a `layout` (`side`, `switch` or `before_after`) and 2 to
+  6 `options`, each a `label`, a line of `text`, `recommended` on one, and
+  one of `html` (a self-contained page, up to 300,000 characters), `file`
+  (the absolute path of an `.html` page or a picture on this host) or
+  `image` (an https link). To show the next round, give the review's `id`
+  from the earlier card.
+- **Kept on the host.** The pages go in the root home's `conduit-reviews/`,
+  round by round (up to 6 MB a round, 99 rounds, 300 reviews, a month
+  untouched); the card carries labels and ids only. Conduit reads a round
+  with `GET /boards/reviews?id=&round=` (capability `review-cards`).
+- **Marks.** One decision is a quick pick the user taps in the chat; several
+  open the review sheet, where each option draws at a phone, tablet or
+  desktop width, light or dark, and each decision is marked Approve, Change
+  or Skip with a note. Conduit posts the marks as a tap (`POST /boards/taps`,
+  `action: "review"`, with `review.round`, `review.marks` and a note), kept
+  with the round, then sends the user's message ("Sent review · Recipe app
+  home", "Picked B · Line"); that turn hears the marks once. The next
+  round's card lists what earlier rounds approved or skipped.
+- **Bot Mode.** A workstream writes the options' pages and reports them; the
+  Bot Chat shows the review with `for` set to it, like `W3`, or with
+  `conduit_show {"from_work": "W3"}`, which shows the review the plugin
+  built from the pages the report names, as the next round when one is
+  open for that workstream. The plugin
+  keeps that workstream with the review and sends the user's marks on to it
+  as a follow-up (reopening it if it was resolved); every later round
+  stays with it, and a round for another workstream is refused.
+- **Where.** Typed chats and the Bot Chat only: a group room (votes come
+  later), a workstream's own chat and a call get a note to describe the
+  options instead. Desktop and messaging apps get the decisions' Markdown.
 
 ### Diff cards (plugin 0.133+)
 
@@ -3455,6 +3619,25 @@ keeps it.
   comes back again. Feed cards carry `back` (`unsent` or `not_done`, empty
   for a card never back) and `back_acted_at`, and `hermes conduit-push
   pulse cards` marks them.
+- **Cards as picks** (plugin 0.150+). Every report, look ahead and
+  follow-up card is a checked pick: a headline, at most one more sentence,
+  a shape with its facts (`date`, `due`, `runs`, `promise`, `status`,
+  `steps`, `drawn` for a Conduit card body, or `plain`) and at most two
+  actions (`ask` with words for the chat's composer, `open` with a link,
+  `draft` with a message, `done`, `later`). Facts that don't hold up draw
+  plain. Each pick names its subject (a remembered item, reminder, calendar
+  entry or scheduled job) and its incident: a new card, an update to an open
+  card by its permanent id (`pc_<id>`), or a close. A new card about a
+  subject with an open card from the last day is held back; an update to a
+  closed card is a new one, so a job that fails, recovers and fails again
+  gets a second card. The report is made from its candidate list only: one
+  that fails twice, or a Hermes without model access, skips that report
+  (`pulse candidates` says so). The morning brief's card carries its parts
+  (summary, Today, Still open and the counts) beside the text. `GET
+  /pulse/feed?looks=1` adds `look`, `card_ref`, `subject` and `updated_at`
+  to each card; older apps get the same cards without them. `hermes
+  conduit-push pulse picks` shows each day's counts (shapes, plain and why,
+  updates, closes, holds, skipped reports). Capability `pulse_looks`.
 - **Hermes's claims, kept to judge** (plugin 0.108+). Memory also notes
   when Hermes said in a chat it had just set a reminder, an alarm or a
   timer, added or changed an event, created or changed a scheduled job, or
@@ -4720,7 +4903,9 @@ while it runs:
   dashboard re-executes once no chat turn runs here. A second call while one
   runs answers the same job. 501 where `/self/restart` would, or when Hermes
   lacks its own pull and gateway restart calls; Conduit then runs the steps
-  above itself. 429 after three starts in ten minutes.
+  above itself. 429 after three starts in ten minutes. On a host that sets
+  `CONDUIT_PUSH_MANAGED` nothing is pulled: 409, or only the restarts its new
+  copy waits on (see the managed paragraph near the top).
 - `GET /api/plugins/conduit_push/self/update` answers `{ok, job, boot_id,
   loaded_version}`. `job.step` is `downloading`, `restarting_gateway`,
   `waiting_for_chats` (with `running_chats`), `restarting_dashboard`, `done`

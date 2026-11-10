@@ -38,7 +38,7 @@ from typing import Any, Callable
 
 from hermes_constants import get_hermes_home
 
-from . import chat_on_screen, client, location_profiles, reply_sources, session_titles
+from . import chat_on_screen, client, location_profiles, reply_sources, session_titles, turn_surface
 from .calls_store import ALERT_DELAY_S, MAX_HOLD_S, CallStore
 from .location_store import LocationStore
 from .events import push_event
@@ -402,6 +402,17 @@ def taken_answers(request_id: str) -> dict[str, str] | None:
         return None
 
 
+def answer_in_writing(home: Any, session_id: str, words: str, asked_before: float | None = None) -> bool:
+    """The user's written answer, passed on from outside the chat, to the
+    question Hermes waits on in ``session_id`` (``CallStore.answer_in_writing``):
+    True when it answered one. Never raises."""
+    try:
+        return _store(home).answer_in_writing(session_id, words, asked_before=asked_before)
+    except Exception:  # noqa: BLE001
+        logger.warning("Conduit could not pass on an answer to a question", exc_info=True)
+        return False
+
+
 def has_call_answers(request_id: str) -> bool:
     """Whether a call has answered every question of ``request_id``,
     without taking them. Never raises."""
@@ -645,11 +656,14 @@ def _at_screen(home: Any, session_ids: list[str]) -> bool:
     try:
         platform = reply_sources.current_platform()
         transport = reply_sources.current_transport()
-        if reply_sources.turn_source(platform, transport) in SCREEN_SOURCES:
+        # The plugin's own work update was sent from no screen, whichever
+        # client has the chat open; Conduit's on-screen chats still count.
+        woken = any(turn_surface.woken(value) for value in session_ids)
+        if not woken and reply_sources.turn_source(platform, transport) in SCREEN_SOURCES:
             return True
         # Hermes' terminal app: no app socket, and not a messaging platform.
         # A fanout is app clients (a chat open on several), never a terminal.
-        if (not reply_sources._is_app_socket(transport) and reply_sources._fanout_peers(transport) is None
+        if (not woken and not reply_sources._is_app_socket(transport) and reply_sources._fanout_peers(transport) is None
                 and isinstance(platform, str)
                 and platform.strip().lower() in TERMINAL_PLATFORMS):
             return True

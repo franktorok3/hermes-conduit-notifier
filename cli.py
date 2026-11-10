@@ -55,8 +55,9 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
     work = commands.add_parser("work", help="Bot workstreams: this bot's Bot Chat coordinates work sessions of its own "
                                             "(on, off, status)")
     work.add_argument("work_action", choices=["on", "off", "status"])
-    work.add_argument("--policy", choices=["strict", "lookups"], default=None,
-                      help="for on: what the coordinator may do itself (default lookups)")
+    work.add_argument("--policy", choices=["lookups", "open", "strict"], default=None,
+                      help="for on: what the coordinator does itself: quick things, any tool for a few steps a "
+                           "turn (lookups, the default), everything (open), or only coordinating (strict)")
     work.add_argument("--max-running", type=int, default=None, help="for on: workstreams running at once (default 2)")
     work.add_argument("--after-restart", choices=["continue", "ask"], default=None,
                       help="for on: a workstream a restart cut off with nothing uncertain in flight is continued "
@@ -65,17 +66,21 @@ def register_cli(parser: argparse.ArgumentParser) -> None:
                       help="for on: what the bot's workstreams ask approval for: as its chats do in Hermes (chats, "
                            "the default), the user's own go-ahead before a step that can't be undone (ask), or "
                            "nothing (off)")
+    work.add_argument("--coordination", choices=["off", "ask", "auto"], default=None,
+                      help="for on: how the Bot Chat keeps its workstreams working together in the turns it "
+                           "starts itself: it asks you before it starts, stops or redirects work (ask, the "
+                           "default), does those on its own (auto), or only passes reports on (off)")
     work.add_argument("--model", default=None, metavar="[PROVIDER:]MODEL",
                       help="for on: the model new workstreams start on, like anthropic:claude-sonnet-5-5; the "
                            "first colon ends the provider, so a model with one of its own is ollama:qwen3:8b "
                            "(\"bot\": the bot's own, the one its Bot Chat uses, the default)")
     pulse = commands.add_parser("pulse", help="Pulse, the proactivity experiment: on, off, status, probe, report, home, outcomes, memory, followups, "
                                                  "cards, rate, done, learned, nudge, budget, candidates, note, quiet, night, "
-                                                 "dates, ahead, inbox, look, where, private, claims, spots")
+                                                 "dates, ahead, inbox, look, where, private, claims, spots, picks")
     pulse.add_argument("pulse_action", choices=["on", "off", "status", "probe", "report", "home", "outcomes", "memory",
                                                 "followups", "cards", "rate", "done", "learned", "nudge", "budget",
                                                 "candidates", "note", "quiet", "night", "dates", "ahead", "inbox",
-                                                "look", "where", "private", "claims", "spots"])
+                                                "look", "where", "private", "claims", "spots", "picks"])
     pulse.add_argument("value", nargs="?", default="",
                        help="for home: the id of the chat to use, or 'auto' to find it by title; "
                             "for outcomes: how many to show, or a chat id; "
@@ -431,7 +436,7 @@ def _work(args: argparse.Namespace) -> int:
         if action == "status" and not work_store.exists(home):
             # On by default: said so without leaving a registry behind.
             print(f"Bot workstreams: {work_store.DEFAULT_POLICY} (on by default; the coordinator "
-                  f"coordinates and may also look things up; up to {work_store.DEFAULT_MAX_RUNNING} running at once). No work yet. "
+                  f"does quick things itself and hands longer work on; up to {work_store.DEFAULT_MAX_RUNNING} running at once). No work yet. "
                   "`hermes conduit-push work off` turns them off for this bot.")
             code = 0
         else:
@@ -452,6 +457,9 @@ def _work(args: argparse.Namespace) -> int:
 
 
 OWN_MODEL = "the bot's own"
+# What each setting has the coordinator do itself, as `work` says it.
+_POLICY_LINES = {"lookups": "does quick things itself and hands longer work on",
+                 "open": "does everything itself and starts work only when it's long"}
 
 
 def _work_on_registry(store: Any, args: argparse.Namespace, action: str) -> int:
@@ -483,15 +491,17 @@ def _work_on_registry(store: Any, args: argparse.Namespace, action: str) -> int:
                 pass
         if picked:
             store.set_workstream_model(None if picked.lower() == "bot" else chosen)
+        if getattr(args, "coordination", None):
+            store.set_coordination(args.coordination)
     elif action == "off":
         store.set_policy("off")
     mode = store.policy()
     print(f"Bot workstreams: {mode if mode != 'off' else 'off'}"
-          + (f" (the coordinator {'may also look things up' if mode == 'lookups' else 'only coordinates'}; "
+          + (f" (the coordinator {_POLICY_LINES.get(mode, 'only coordinates')}; "
              f"up to {store.max_running()} running at once; after a restart, safe work is "
              f"{'continued' if store.after_restart() == 'continue' else 'left to ask about'}; workstream "
              f"approvals: {store.workstream_approvals()}; workstream model: "
-             f"{store.workstream_model().get('model') or OWN_MODEL})"
+             f"{store.workstream_model().get('model') or OWN_MODEL}; coordination: {store.coordination()})"
              if mode != "off" else ""))
     if action == "status":
         for work in store.list(include_closed=False, limit=20):
@@ -508,7 +518,7 @@ def _pulse(args: argparse.Namespace) -> int:
     home = get_hermes_home()
     action = args.pulse_action
     # Follow-ups are on by default, so even `followups on|off` needs no file yet.
-    listing = action in ("followups", "cards", "rate", "done", "learned", "candidates", "dates", "claims") \
+    listing = action in ("followups", "cards", "rate", "done", "learned", "candidates", "dates", "claims", "picks") \
         or (action in ("memory", "ahead", "inbox", "look", "where", "private", "spots")
             and (args.value or "").strip() not in ("on", "off")) \
         or (action == "nudge" and not (args.value or "").strip()) \
@@ -582,6 +592,8 @@ def _pulse(args: argparse.Namespace) -> int:
         return _pulse_memory(pulse_store, home, (args.value or "").strip(), str(getattr(args, "extra", "") or "").strip())
     if action == "dates":
         return _pulse_dates(pulse_store, home)
+    if action == "picks":
+        return _pulse_picks(pulse_store)
     if action == "ahead":
         return _pulse_ahead(pulse_store, home, (args.value or "").strip())
     if action == "inbox":
@@ -1915,9 +1927,25 @@ def _preference_text(preference: dict) -> str:
     return f"{how} {lean} of {what}{counted}"
 
 
+def _pulse_picks(pulse_store: Any) -> int:
+    """How Pulse's picks went each day (pulse_picks.count): the shapes they
+    drew, what fell back to plain and why, the updates, closes and holds."""
+    from . import pulse_picks
+    counts = pulse_store.get(pulse_picks.PICK_COUNTS)
+    days = {day: value for day, value in counts.items() if isinstance(value, dict)} if isinstance(counts, dict) else {}
+    if not days:
+        print("No picks counted yet.")
+        return 0
+    for day in sorted(days, reverse=True):
+        names = days[day]
+        print(day + ": " + ", ".join(f"{_printable(str(name))} {int(names[name])}" for name in sorted(names)
+                                    if isinstance(names[name], int) and not isinstance(names[name], bool)))
+    return 0
+
+
 CANDIDATE_RUNS = 50
 RUN_STATES = {"working": "being made", "ready": "ready to send", "failed": "failed", "sent": "sent",
-              "dropped": "too late to send"}
+              "dropped": "too late to send", "skipped": "skipped (no report this time)"}
 
 
 def _pulse_candidates(pulse_store: Any, home: Any, value: str, extra: str = "") -> int:
@@ -1947,7 +1975,7 @@ def _pulse_candidates(pulse_store: Any, home: Any, value: str, extra: str = "") 
         if isinstance(run.get("refused"), str) and run["refused"]:
             state = f"sent, but Hermes didn't take it ({run['refused']}); the report is tried again as usual"
         elif isinstance(error, str) and error and run["state"] != "dropped":
-            state = f"failed ({error}), so the report {'went' if run['state'] == 'sent' else 'goes'} out as before"
+            state = f"failed ({error}), so that report was skipped"
         used = f", {tokens} tokens" if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens else ""
         print(_printable(f"Latest list: {state}{used}"))
     runs = pulse_store.candidate_runs(max(1, min(int(value or 1), CANDIDATE_RUNS)))

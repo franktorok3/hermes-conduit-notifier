@@ -934,10 +934,20 @@ def start_self_update(profile: Optional[str], schedule: Callable[[float, Callabl
                       notify: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
     """Starts the update on the host, or returns the one still under way."""
     global _self_update_thread, _self_update_job
+    # A host that manages the plugin pulls nothing from here. When the copy it put on disk
+    # waits for its restarts, the job runs only those (the gateway's, with its drain and its
+    # root-unit fallback, then the dashboard's); otherwise there is nothing to do.
+    managed = capabilities.managed_by() is not None
+    # An unreadable copy on disk reads as nothing waiting: no job, no failure push.
+    if managed and capabilities._plugin_version() in (capabilities.LOADED_VERSION, None):
+        raise core.TokenError(409, "The host manages the Conduit plugin, so it updates with the host, not from Conduit")
     refusal = _self_restart_refusal()
     if refusal is not None:
         raise core.TokenError(*refusal)
     pull, restart_gateway = steps or _hermes_update_steps()
+    if managed:
+        def pull() -> Dict[str, Any]:
+            return {"ok": True}
     path = path or _self_update_path()
     with _self_update_lock:
         if _self_update_thread is not None and _self_update_thread.is_alive():
@@ -1124,6 +1134,11 @@ def _resume_gateway_restart(path: Path, job: Dict[str, Any],
         pull, restart_gateway = _hermes_update_steps()
     except Exception:  # noqa: BLE001
         return give_up()
+    if capabilities.managed_by() is not None:
+        # A host that manages the plugin pulls nothing from here, not even a resumed
+        # job's no-op pull, which would take a newer version than the one it pinned.
+        def pull() -> Dict[str, Any]:
+            return {"ok": True}
     # From the pull again (a no-op once pulled), so a failure there reads as the pull's.
     job.update(boot_id=capabilities.BOOT_ID, pid=os.getpid(), step="downloading")
 

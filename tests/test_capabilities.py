@@ -104,6 +104,8 @@ def test_every_capability_names_a_served_route_family():
         "pulse_private": "/pulse",
         # Next steps: their level is in /pulse/learned, their cards in the feed.
         "pulse_next": "/pulse/learned",
+        # Cards drawn from their picks: each card's look in the feed.
+        "pulse_looks": "/pulse/feed",
         # Walking past: the reply to a location batch, and a setting on the /pulse control route.
         "pulse_spots": "/location/ingest",
         "present-v1": "/present/",
@@ -129,6 +131,9 @@ def test_every_capability_names_a_served_route_family():
         "predict": "/predict",
         "side-question": "/side-question",
         "room-files": "/room-files",
+        "room-file-pictures": "/room-files/data-url",
+        "room-file-reads": "/room-files/data-url",
+        "room-files-linked": "/room-files/data-url",
         "room-images": "/room-images",
         "speech-server": "/speech-server/",
         "local-live": "/local-live/",
@@ -167,6 +172,7 @@ def test_every_capability_names_a_served_route_family():
         "diff-cards": "/boards/diffs",
         "card-taps": "/boards/taps",
         "card-tap-drop": "/boards/taps",
+        "review-cards": "/boards/reviews",
     }
     assert set(prefixes) == set(api.capabilities.ROUTE_CAPABILITIES)
     for capability, prefix in prefixes.items():
@@ -184,3 +190,27 @@ def test_a_newer_version_on_disk_reads_as_restart_needed(monkeypatch):
     assert body["version"] == "99.0.0"
     assert body["loaded_version"] == api.capabilities.LOADED_VERSION != "99.0.0"
     assert body["restart_needed"] is True
+
+
+def test_an_unmanaged_host_reports_no_managed_key(monkeypatch):
+    monkeypatch.delenv("CONDUIT_PUSH_MANAGED", raising=False)
+    body = _client().get(f"{BASE}/capabilities").json()
+    assert "managed" not in body and "managed_by" not in body
+
+
+def test_a_managed_host_says_so(monkeypatch):
+    for value, managed_by in (("1", None), ("true", None), ("YES", None),
+                              ("The Farm", "The Farm"), ("  Family farm\n ", "Family farm"),
+                              ("x" * 200, "x" * 80)):
+        monkeypatch.setenv("CONDUIT_PUSH_MANAGED", value)
+        body = _client().get(f"{BASE}/capabilities").json()
+        assert body["managed"] is True
+        assert body.get("managed_by") == managed_by
+    for value in ("", "0", "false", "no", "off"):
+        monkeypatch.setenv("CONDUIT_PUSH_MANAGED", value)
+        assert "managed" not in _client().get(f"{BASE}/capabilities").json()
+
+
+def test_a_control_character_never_reaches_the_phone(monkeypatch):
+    monkeypatch.setenv("CONDUIT_PUSH_MANAGED", "Farm\x07\x1b[31m")
+    assert _client().get(f"{BASE}/capabilities").json()["managed_by"] == "Farm[31m"

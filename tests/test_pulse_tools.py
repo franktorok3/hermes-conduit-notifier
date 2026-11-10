@@ -12,6 +12,7 @@ import pytest
 from test_maps import NOW, _phone, location, maps, sharing
 from test_pulse import ROOT, SID, _load, cli, control, plugin, pulse, store
 from test_pulse_followup import CHAT, commitment, followup, live, tell  # noqa: F401
+from test_pulse_candidates import FOUND, deliver, listed, reporting  # noqa: F401
 
 tools = _load("conduit_push.pulse_tools", ROOT / "pulse_tools.py")
 learning = _load("conduit_push.pulse_learning", ROOT / "pulse_learning.py")
@@ -193,6 +194,25 @@ def test_the_bridge_lists_tools_and_each_call_through_it_is_checked():
         False, tools.BRIDGE_BLOCK.format(tool="tool_call"))
     for args in ({}, {"calls": "not json"}, {"calls": []}, "text", {"name": "conduit_phone", "arguments": "{"}):
         assert not check("tool_call", args).allowed
+
+
+def test_a_bridged_calls_unreadable_arguments_text_gets_the_parsers_words():
+    # notifier#656: read as {} before, so the action check refused it with
+    # nothing about the broken JSON.
+    broken = {"calls": [{"name": "conduit_calendar", "arguments": {"action": "events"}},
+                        {"name": "conduit_contacts", "arguments": '{"action": "people"'}]}
+    verdict = check("tool_call", broken)
+    assert not verdict.allowed
+    assert verdict.message.startswith("That tool_call's calls[1].arguments is JSON text that couldn't be read (")
+    assert tools.unreadable_arguments({"name": "conduit_phone", "arguments": "{"})[0] == "arguments"
+    assert tools.unreadable_arguments({"name": "conduit_maps", "args": "{"})[0] == "arguments"
+    assert tools.unreadable_arguments(bridged(("conduit_contacts", '{"action": "people"'), as_text=True))[0] == \
+        "calls[0].arguments"
+    # Blank text is no arguments, as Hermes reads it; readable text and objects pass.
+    for fine in ({"calls": [{"name": "conduit_phone", "arguments": "  "}]},
+                 {"name": "conduit_phone", "arguments": json.dumps({"action": "alarms"})},
+                 bridged(("conduit_calendar", {"action": "events"})), {"calls": "not json"}, "text", {}):
+        assert tools.unreadable_arguments(fine) is None
 
 
 def test_calls_through_the_bridge_count_toward_the_caps():
@@ -482,15 +502,19 @@ def test_what_a_follow_up_looked_up_goes_on_its_card(live):
     assert entry["looked"] == ["calendar", "web"]
 
 
-def test_what_a_report_looked_up_goes_on_each_of_its_cards(live):
-    live.store.set("report_requested", True)
-    pulse.tick()
+def test_what_a_report_looked_up_goes_on_each_of_its_cards(reporting):
+    live = reporting
+    now = time.time()
+    live.db.message("user", "Can you look at the flaky deploy tomorrow?", sid=CHAT, at=now - 600)
+    live.llm.replies.append({"remembered": [], "found": [
+        FOUND, {**FOUND, "line": "Dinner at Nopa is Saturday at 19:00", "kind": "date"}]})
+    listed(live, now)
+    pulse.tick(now + 1)
     [attempt] = live.store.in_flight()
     assert pulse.pre_llm_call(SID, "t1", attempt["text"]).startswith(pulse.report.REPORT_LOOK_NOTE)
     assert pulse.pre_tool_call(SID, "t1", "conduit_maps", {"action": "lookup", "query": "Nopa"}) is None
-    live.db.message("user", attempt["text"])
-    live.db.message("assistant", "1. [date] Dinner at Nopa is Saturday at 19:00.\n2. [other] The deploy is green.")
-    pulse.tick()
+    deliver(live, attempt["text"], "1. Dinner at Nopa is Saturday at 19:00.\n2. The deploy.")
+    pulse.tick(now + 2)
     cards = live.store.cards()
     assert len(cards) == 2 and all(learning.card_entry(card)["looked"] == ["maps"] for card in cards)
 
