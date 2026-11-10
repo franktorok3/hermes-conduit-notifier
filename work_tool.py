@@ -5,9 +5,12 @@ The coordinator gets nine tools (``work_list``, ``work_start``, ``work_send``,
 ``work_stop``, ``work_read``, ``work_close``, ``work_ask``, ``work_reply``,
 ``work_note``).
 They answer in this bot's canonical Bot Chat, and only while the bot's
-setting (``conduit-push work on``) is on. In a group room hosted here with
-only this host's bots, a turn of the bot's may start, send to, stop and read
-its work too (room_work): that work reports back into the room. Every one that names work takes a
+setting (``conduit-push work on``) is on. A chat the host lists in
+``work_entry_points.yaml`` (source, platform, chat type, profile, and a
+session id when the entry gives one) may submit work the same way. In a
+group room hosted here with only this host's bots, a turn of the bot's may
+start, send to, stop and read its work too (room_work): that work reports
+back into the room. Every one that names work takes a
 ref (W1, A1) from this bot's own registry (work_store), never a session id,
 so a coordinator can't reach a session that isn't its bot's work. (A result
 carries the session's id only inside its links, ``conduit://session/`` for
@@ -58,7 +61,7 @@ from typing import Any, Callable, Optional
 import uuid
 from urllib.parse import quote, unquote
 
-from . import room_rules, room_work, screen_lock, work_broker, work_store, work_trees
+from . import room_rules, room_work, screen_lock, work_broker, work_entry_points, work_store, work_trees
 
 logger = logging.getLogger("hermes.plugins.conduit_push")
 
@@ -124,8 +127,9 @@ ASK_PAIR_PER_HOUR = 10
 # A workstream's settled states that carry its last report.
 _REPORTED = ("ready", "done", "failed", "interrupted", "stopped")
 
-NOT_BOT_CHAT = ("Work tools only work in this bot's Bot Chat, which coordinates its work. This conversation isn't "
-                "it, so nothing was started or changed.")
+NOT_BOT_CHAT = ("Work tools only work in this bot's Bot Chat, which coordinates its work, or in a chat this host "
+                "lists as a place work can be submitted. This conversation isn't one of those, so nothing was "
+                "started or changed.")
 IN_WORKSTREAM = ("Only the Bot Chat coordinating this work can start work or ask other bots, so nothing was sent. If "
                  "you need another bot's help, say in your report which bot and what you need, and end your turn: "
                  "your coordinator asks it for you, and the answer comes back here.")
@@ -514,6 +518,29 @@ def is_bot_chat(session_id: Any, home: Optional[Path] = None) -> bool:
     return _titled_bot_chat(session_id, home) is True
 
 
+def _trusted_entry(session_id: Any, home: Path) -> bool:
+    """Whether this chat may submit work because the host listed it.
+
+    A fork or a subagent is never listed, even when it runs under a listed
+    session id. A room was already decided above: a room with other people's
+    agents, and a legacy group, stay refused."""
+    sid = session_id.strip() if isinstance(session_id, str) else ""
+    if _is_child(sid):
+        return False
+    return work_entry_points.allows(session_id, home)
+
+
+def _not_bot_chat(session_id: Any, home: Path, note: str) -> dict:
+    """The not_bot_chat refusal, naming the source, chat type and profile
+    this turn actually had so the next mismatch can be told apart."""
+    found = work_entry_points.seen(session_id, home)
+    if note == NOT_BOT_CHAT:
+        showed = {field: found[field] or "unknown" for field in ("source", "platform", "chat_type", "profile")}
+        note = (f"{note} Saw source {showed['source']}, platform {showed['platform']}, "
+                f"chat type {showed['chat_type']}, profile {showed['profile']}.")
+    return {"ok": False, "error": "not_bot_chat", "note": note, **found}
+
+
 def _titled_bot_chat(session_id: Any, home: Optional[Path] = None) -> Optional[bool]:
     """Whether the session is titled as this bot's Bot Chat (a fork of it
     runs under the same id); None when its title couldn't be read."""
@@ -619,7 +646,7 @@ def _handle(name: str, args: dict, session_id: Any) -> dict:
         if inside is not None and name in WORKER_READS:
             return _worker_read(home, inside, name, args)
         if inside is not None:
-            return {"ok": False, "error": "not_bot_chat", "note": IN_WORKSTREAM}
+            return _not_bot_chat(session_id, home, IN_WORKSTREAM)
         try:
             room = room_work.room_of(session_id, home, work_broker.profile_of(home))
         except room_work.OthersHere:
@@ -630,8 +657,8 @@ def _handle(name: str, args: dict, session_id: Any) -> dict:
             return {"ok": False, "error": "not_a_member", "note": room_work.NOT_A_MEMBER}
         except room_work.Unreadable:
             return {"ok": False, "error": "unavailable", "note": room_work.UNREADABLE}
-        if room is None:
-            return {"ok": False, "error": "not_bot_chat", "note": NOT_BOT_CHAT}
+        if room is None and not _trusted_entry(session_id, home):
+            return _not_bot_chat(session_id, home, NOT_BOT_CHAT)
         if name not in room_work.TOOLS:
             return {"ok": False, "error": "bot_chat_only", "note": room_work.BOT_CHAT_ONLY}
     if name == "work_note":

@@ -13,6 +13,11 @@ checks it). The format is fixed, because Conduit reads it:
 - One line per change, starting with `- `. Fixes say what goes wrong without
   the update. Plain words: these show on a phone.
 
+## 0.140.3 (2026-11-10)
+
+### New and improved
+- Work can be started from the chats this host lists (by default the desktop app, Conduit on the iPhone, and one voice chat), as well as from a bot's Bot Chat. A chat that isn't listed is still refused, and the reply names the source, chat type, and profile it saw.
+
 ## 0.140.2 (2026-11-08)
 
 ### Fixes
