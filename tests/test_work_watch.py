@@ -256,6 +256,47 @@ def test_flags_kept_without_a_turn_dont_reopen_the_hours_allowance(on, hermes, h
         assert flag["woke"] is (number == 0)
 
 
+def _kept_flag(store, woke, at=None):
+    store.event_add("W1", "flag", "watch", "a connection", detail=json.dumps({"with": ["W2"], "woke": woke}), at=at)
+
+
+def _next_flag(home):
+    call("work_progress", {"found": "the v1 users API is gone"}, session_id=WORKER)
+    return watch.check(home, ask=Helper(FLAG))
+
+
+def test_under_the_hourly_cap_the_next_flag_wakes(on, hermes, home, told):
+    two(on)
+    for _ in range(watch.FLAGS_PER_HOUR - 1):
+        _kept_flag(on, True)
+    assert _next_flag(home)["woke"] is True
+
+
+def test_at_the_hourly_cap_the_next_flag_does_not_wake(on, hermes, home, told):
+    two(on)
+    for _ in range(watch.FLAGS_PER_HOUR):
+        _kept_flag(on, True)
+    assert _next_flag(home)["woke"] is False
+
+
+def test_held_flags_cannot_hide_earlier_wakes_from_the_hourly_cap(on, hermes, home, told):
+    # Codex on PR #2: twelve wakes, then 500 held flags, and the next flag woke.
+    two(on)
+    for _ in range(watch.FLAGS_PER_HOUR):
+        _kept_flag(on, True)
+    for _ in range(watch.FLAGS_COUNTED):
+        _kept_flag(on, False)
+    assert _next_flag(home)["woke"] is False
+
+
+def test_wake_flags_older_than_an_hour_no_longer_count(on, hermes, home, told):
+    two(on)
+    then = time.time() - 3600.0 - 1
+    for _ in range(watch.FLAGS_PER_HOUR):
+        _kept_flag(on, True, at=then)
+    assert _next_flag(home)["woke"] is True
+
+
 def test_a_long_report_keeps_the_line_the_flag_is_about(on, hermes, home, told):
     two(on)
     call("work_progress", {"found": ["GET /v1/users now returns 410 Gone", "the docs say v2", "v2 needs a token",

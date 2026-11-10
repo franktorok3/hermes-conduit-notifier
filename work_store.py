@@ -784,6 +784,14 @@ class Store:
         rows = self._read(f"SELECT * FROM events WHERE {where} ORDER BY id {order} LIMIT ?", (*args, limit))
         return rows if oldest else list(reversed(rows))
 
+    def woke_flags_since(self, since: float) -> int:
+        """How many flags since then started a hidden turn. A count of the
+        whole window, so held flags cannot push the waking ones out of a
+        limited read."""
+        rows = self._read("SELECT COUNT(*) AS n FROM events WHERE kind = 'flag' AND at >= ? AND "
+                          "json_extract(detail, '$.woke') = 1", (since,))
+        return int(rows[0]["n"]) if rows else 0
+
     def sends_since(self, since: float, *, kind: str = "send") -> list[dict]:
         """The outbox rows of one kind written since then, oldest first."""
         return self._read("SELECT * FROM outbox WHERE kind = ? AND created_at >= ? ORDER BY created_at", (kind, since))

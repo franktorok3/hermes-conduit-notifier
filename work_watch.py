@@ -38,7 +38,7 @@ TASK_DESCRIPTION = ("Reads what a bot's workstreams report while they work and t
 # Reports a moment apart are read together.
 BATCH_S = 4.0
 NEW_EVENTS = 12
-FLAGS_COUNTED = 500  # an hour's, to count the turns they started
+FLAGS_COUNTED = 500  # recent flags the helper is shown, and the cap note names
 NEW_AGE_S = 3600.0
 OPEN_WORK = 12
 WORK_LINES = 6
@@ -224,7 +224,7 @@ def check(home: Path, words: Any = (), ask: Optional[Callable[[str, str], tuple[
                 "flagged " + ", ".join([source, *others]) if flagged else "nothing to flag", tokens)
     if not flagged:
         return None
-    woke = sum(1 for flag in flags if _detail(flag).get("woke")) < FLAGS_PER_HOUR
+    woke = store.woke_flags_since(now - 3600.0) < FLAGS_PER_HOUR
     named = [event for event in new if event["ref"] in (source, *others)]
     first = next(event for event in named if event["ref"] == source)  # what the flag is about stays
     read = [first] + [event for event in named[-(READ_LINES - 1):] if event is not first]
