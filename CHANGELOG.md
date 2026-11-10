@@ -13,6 +13,15 @@ checks it). The format is fixed, because Conduit reads it:
 - One line per change, starting with `- `. Fixes say what goes wrong without
   the update. Plain words: these show on a phone.
 
+## 0.154.1 (2026-11-10)
+
+### New and improved
+- Work can be started from a bot's Bot Chat and from the chats this host
+  lists by session. The voice chat submits into the primary Bot Chat, and
+  a second copy of the same request is not started again. The desktop app
+  and Conduit stay off until a login captured from a refusal is pinned. A
+  refused chat names the source, chat type, profile, and login it saw.
+
 ## 0.154.0 (2026-11-10)
 
 ### New and improved
