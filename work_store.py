@@ -51,6 +51,10 @@ POLICIES = ("off", "strict", "lookups", "open")
 # started for it; strict and open stay choices in Edit Bot > Work.
 DEFAULT_POLICY = "lookups"
 DEFAULT_MAX_RUNNING = 2
+# How many steps a Quick Things Here turn does in the Bot Chat before the
+# rest goes to a workstream (Eric 2026-11-10: "can that number be
+# configurable?"). The first is the default.
+QUICK_STEPS = (5, 10, 20)
 # What a restart does with a workstream it stopped that had nothing
 # uncertain in flight (C.7): continue it once, or only tell the coordinator.
 AFTER_RESTART = ("continue", "ask")
@@ -327,6 +331,18 @@ class Store:
 
     def set_max_running(self, value: int) -> None:
         self.set_meta("max_running", str(min(max(int(value), 1), MAX_RUNNING_LIMIT)))
+
+    def quick_steps(self) -> int:
+        try:
+            value = int(self.get_meta("quick_steps", str(QUICK_STEPS[0])))
+        except ValueError:
+            return QUICK_STEPS[0]
+        return value if value in QUICK_STEPS else QUICK_STEPS[0]
+
+    def set_quick_steps(self, value: int) -> None:
+        if value not in QUICK_STEPS:
+            raise ValueError(f"quick_steps must be one of {', '.join(str(n) for n in QUICK_STEPS)}")
+        self.set_meta("quick_steps", str(value))
 
     def after_restart(self) -> str:
         value = self.get_meta("after_restart", DEFAULT_AFTER_RESTART)
@@ -701,6 +717,15 @@ class Store:
                           "ORDER BY created_at DESC LIMIT 50", (ref,))
         return {row["id"]: row for row in rows}
 
+    def outbox_states_of(self, ids: list[str]) -> dict[str, dict]:
+        """The same for the sends with these ids, however many came since."""
+        ids = [item for item in dict.fromkeys(ids) if item][:500]
+        if not ids:
+            return {}
+        rows = self._read("SELECT id, outcome, accepted_at, delivered_at FROM outbox WHERE kind = 'send' AND id IN "
+                          f"({', '.join('?' for _ in ids)})", tuple(ids))
+        return {row["id"]: row for row in rows}
+
     def own_sends_since(self, ref: str, since: float) -> int:
         rows = self._read("SELECT COUNT(*) AS n FROM outbox WHERE ref = ? AND kind = 'send' AND own = 1 AND "
                           "accepted_at > 0 AND created_at >= ?", (ref, since))
@@ -745,6 +770,23 @@ class Store:
             args.extend(kinds)
         rows = self._read(f"SELECT * FROM events WHERE {where} ORDER BY id DESC LIMIT ?", (*args, limit))
         return list(reversed(rows))
+
+    def ledger(self, *, after_id: int = 0, since: float = 0.0, kinds: Optional[tuple[str, ...]] = None,
+               limit: int = 50, oldest: bool = False) -> list[dict]:
+        """The newest events of every workstream of the bot (with ``oldest``
+        the first of them, for a reader working through them), oldest first:
+        those after an event (``after_id``) or a time (``since``)."""
+        where, args = "id > ? AND at >= ?", [after_id, since]
+        if kinds:
+            where += f" AND kind IN ({', '.join('?' for _ in kinds)})"
+            args.extend(kinds)
+        order = "ASC" if oldest else "DESC"
+        rows = self._read(f"SELECT * FROM events WHERE {where} ORDER BY id {order} LIMIT ?", (*args, limit))
+        return rows if oldest else list(reversed(rows))
+
+    def sends_since(self, since: float, *, kind: str = "send") -> list[dict]:
+        """The outbox rows of one kind written since then, oldest first."""
+        return self._read("SELECT * FROM outbox WHERE kind = ? AND created_at >= ? ORDER BY created_at", (kind, since))
 
     # What the Bot Chat asked the user (work_propose)
 
