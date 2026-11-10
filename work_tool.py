@@ -8,7 +8,8 @@ They answer in this bot's canonical Bot Chat, and only while the bot's
 setting (``conduit-push work on``) is on. A chat the host lists in
 ``work_entry_points.yaml`` may submit work too, into the Focal Point
 primary's registry, and only when the entry names a session id or the
-server-recorded login. In a group room hosted here with only this host's
+server-recorded login. A listed network peer matches only together with
+that login. In a group room hosted here with only this host's
 bots, a turn of the bot's may start, send to, stop and read its work too
 (room_work): that work reports back into the room. Every one that names work takes a
 ref (W1, A1) from this bot's own registry (work_store), never a session id,
@@ -604,9 +605,10 @@ def _not_bot_chat(session_id: Any, home: Path, note: str) -> dict:
     if note == NOT_BOT_CHAT:
         showed = {field: found[field] or "unknown"
                   for field in ("source", "platform", "chat_type", "profile", "user_id")}
+        peer = found.get("peer") or "unknown"
         note = (f"{note} Saw source {showed['source']}, platform {showed['platform']}, "
                 f"chat type {showed['chat_type']}, profile {showed['profile']}, "
-                f"user_id {showed['user_id']}.")
+                f"user_id {showed['user_id']}. Peer {peer}.")
     return {"ok": False, "error": "not_bot_chat", "note": note, **found}
 
 

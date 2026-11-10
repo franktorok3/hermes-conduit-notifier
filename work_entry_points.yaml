@@ -6,14 +6,23 @@
 # from the authenticated transport (tui_gateway _transport_auth_user_id),
 # not a field the client sends. An empty user_id never matches.
 #
+# peer_ips and peer_nodes, when set, match only together with user_ids.
+# They never replace a login. The peer is the TCP address of the
+# WebSocket socket. The logged "ws accepted peer=" value is not used:
+# a proxy rewrite of it is the forwarded address with port 0. An
+# unknown, empty, loopback, or port-0 peer does not match. This file
+# is not a place for X-Forwarded-For, X-Real-IP, Forwarded, or
+# X-Conduit-Client, and the plugin does not run tailscale whois.
+#
 # platform and chat_type, when set, come from the gateway session key on
 # the row. They are not read from HERMES_SESSION_PLATFORM: the client
 # influences that by the source it sends. A desktop row on this host has
 # an empty chat_type and no session key, so those fields are omitted here.
 #
 # capture: log the raw identity of a refused turn (source, platform,
-# chat type, profile, user_id, session id). No message text. Turn it off
-# once the logins below are pinned.
+# chat type, profile, user_id, session id, the socket peer, and the
+# logged ws client). No message text. The logged client is not a match.
+# Turn it off once the logins below are pinned.
 #
 # A profile replaces this whole file with a regular file at
 # <profile home>/conduit/work-entry-points.yaml. No wildcards.
@@ -53,7 +62,15 @@ entries:
   # Saved voice transcripts are also source desktop, with no login, and
   # must stay refused.
   #
-  # To enable after a captured refusal shows the login:
+  # peer_ips is the address IT named for this Mac on 2026-11-10. It is
+  # not verified. The logged peer on this host has port :0, which is a
+  # proxy rewrite, not this address, so the entry cannot match until the
+  # gateway sees a real socket (a direct tailnet connection) or stores
+  # that socket on the session row as client_peer. Frank must approve
+  # before this entry is enabled. Uncomment user_ids in the same edit.
+  # Enabling this block alone authorizes nothing.
+  #
+  # To enable after that approval and a captured non-loopback peer:
   #   enabled: true
   #   user_ids:
   #     - "uid:1000"
@@ -61,6 +78,8 @@ entries:
     enabled: false
     source: desktop
     profile: default
+    peer_ips:
+      - "100.71.31.105"
 
   # Hermes Conduit on the iPhone. Disabled. The host has no session with
   # source gui (api_server 90, desktop 9, oneshot 6, tui 1). This plugin's
@@ -69,7 +88,14 @@ entries:
   # here. The phone's chats are likely source desktop, the same shape as
   # the Mac app. Pin user_ids from a captured refusal, and set source to
   # the captured value, before enabling. Do not enable on source alone.
+  #
+  # peer_ips is the address IT named for Frank's iPhone on 2026-11-10
+  # (100.66.76.84). It is not verified. Same rule as the Mac entry: port
+  # :0 or a loopback socket does not match, user_ids stay commented, and
+  # Frank must approve before enabled is turned on.
   - name: conduit-iphone
     enabled: false
     source: desktop
     profile: default
+    peer_ips:
+      - "100.66.76.84"

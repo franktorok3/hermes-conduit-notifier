@@ -2,7 +2,8 @@
 
 The list is ``work_entry_points.yaml`` beside this file. A regular file at
 ``<profile home>/conduit/work-entry-points.yaml`` replaces it for that
-profile. Nothing here opens a socket or reads a network.
+profile. Nothing here opens a socket, looks up a name, or reads a network.
+The peer, when there is one, is read off a socket the gateway already accepted.
 
 An entry authorizes a turn only when its source and profile match and it
 names a session id or a ``user_id``. Source alone is not enough: a client
@@ -10,6 +11,20 @@ chooses ``source`` on ``session.create``. ``user_id`` is the login Hermes
 stores from the authenticated transport
 (``tui_gateway`` ``_transport_auth_user_id``), not from the create params.
 An empty ``user_id`` never matches.
+
+An entry may also list ``peer_ips`` or ``peer_nodes``. They match only
+together with ``user_ids``, never instead of them. The peer is the TCP
+address of this turn's WebSocket socket (``getpeername``). When this
+process has no socket, ``client_peer`` and ``client_peer_node`` on the
+session row are used if Hermes stored them there. The value logged as
+``ws accepted peer=`` is not a match: in gated mode uvicorn's proxy
+headers replace ``ws.client`` with ``X-Forwarded-For``, and a bare
+address gets port 0. A missing, empty, loopback, unspecified, or port-0
+peer does not match, and neither does a node carried on such a peer.
+Nothing here reads ``X-Forwarded-For``, ``X-Real-IP``, ``Forwarded``,
+or ``X-Conduit-Client``, and nothing runs ``tailscale whois``. A node
+is used only when the socket's transport or the session row already
+carries one the host stored.
 
 Platform and chat type come only from the gateway session key on the row
 (``agent:<profile>:<platform>:<chat type>:<chat id>``), or from the row's
@@ -20,17 +35,20 @@ influence it. ``_turn_platform`` reads it for tests and is not an
 authorization input.
 
 A fork or a delegated child never matches. With ``capture: true``, a
-refused turn logs the raw identity so a login can be pinned later.
+refused turn logs the raw identity, the socket peer, and the logged ws
+client, so a login can be pinned later. The logged client is not a match.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
 import re
 import sqlite3
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -51,7 +69,12 @@ _NAME = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 _TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 # A Hermes profile name (hermes_cli.profiles.normalize_profile_name), lowercased.
 _PROFILE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_COLUMNS = ("id", "source", "session_key", "model_config", "user_id", "chat_type")
+_COLUMNS = ("id", "source", "session_key", "model_config", "user_id", "chat_type",
+            "client_peer", "client_peer_node")
+# A Tailscale-style DNS name the host stored. Not an IP, and not "unknown".
+_NODE = re.compile(
+    r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")
+_NOT_A_NODE = frozenset({"unknown", "localhost"})
 
 
 @dataclass(frozen=True)
@@ -64,10 +87,13 @@ class Entry:
     chat_type: str = ""
     session_ids: tuple[str, ...] = ()
     user_ids: tuple[str, ...] = ()
+    peer_ips: tuple[str, ...] = ()
+    peer_nodes: tuple[str, ...] = ()
 
     def matches(self, found: "Seen") -> bool:
         """Whether this entry authorizes ``found``. Disabled entries, and
-        entries with neither a session id nor a user id, never do."""
+        entries with neither a session id nor a user id, never do. Peer
+        lists do not stand in for the user id."""
         if not self.enabled or found.delegated or found.profile_mismatch:
             return False
         if not self.session_ids and not self.user_ids:
@@ -84,6 +110,14 @@ class Entry:
                 return False
         if self.user_ids and found.user_id not in self.user_ids:
             return False
+        if self.peer_ips or self.peer_nodes:
+            if not self.user_ids or found.user_id not in self.user_ids:
+                return False
+            ip, node = _usable(found.peer, found.peer_node)
+            if self.peer_ips and ip not in self.peer_ips:
+                return False
+            if self.peer_nodes and node not in self.peer_nodes:
+                return False
         return True
 
 
@@ -103,6 +137,11 @@ class Seen:
     chat_id: str = ""
     delegated: bool = False
     profile_mismatch: bool = False
+    # ``peer`` is the socket, or the row, never the logged ws client.
+    # ``ws_client`` is that log value, kept so a refusal can show it.
+    peer: str = ""
+    peer_node: str = ""
+    ws_client: str = ""
 
 
 def allows(session_id: Any, home: Path) -> bool:
@@ -121,11 +160,13 @@ def primary_session_id(home: Optional[Path] = None) -> str:
 
 
 def seen(session_id: Any, home: Optional[Path]) -> dict[str, str]:
-    """The source, platform, chat type, profile and user id a refusal
-    should report, as the row stored them."""
+    """The source, platform, chat type, profile, user id and socket peer
+    a refusal should report. The peer is the socket or the row, not the
+    logged ws client."""
     found = observe(session_id, home) if home is not None else Seen()
     reported = {"source": found.source, "platform": found.platform, "chat_type": found.chat_type,
-                "profile": found.profile, "user_id": found.user_id}
+                "profile": found.profile, "user_id": found.user_id, "peer": found.peer,
+                "peer_node": found.peer_node}
     if found.delegated:
         reported["delegated"] = "true"
     return reported
@@ -135,14 +176,17 @@ def record_refusal(session_id: Any, home: Optional[Path]) -> None:
     """Log the raw identity of a refused turn while capture is on.
 
     The line is how a desktop or phone login gets pinned: source, the
-    stored platform and chat type, the profile, and ``user_id``. No
-    message text."""
+    stored platform and chat type, the profile, ``user_id``, the socket
+    peer, and the logged ws client. No message text. The logged client
+    is not a match."""
     if home is None or not _capture(home):
         return
     found = observe(session_id, home)
-    logger.info("conduit_push: work refused source=%s platform=%s chat_type=%s profile=%s user_id=%s session=%s",
+    logger.info("conduit_push: work refused source=%s platform=%s chat_type=%s profile=%s "
+                "user_id=%s session=%s peer=%s peer_node=%s ws_client=%s",
                 found.source or "-", found.platform or "-", found.chat_type or "-", found.profile or "-",
-                found.user_id or "-", found.session_id or "-")
+                found.user_id or "-", found.session_id or "-", found.peer or "-", found.peer_node or "-",
+                found.ws_client or "-")
 
 
 def observe(session_id: Any, home: Optional[Path]) -> Seen:
@@ -166,12 +210,14 @@ def observe(session_id: Any, home: Optional[Path]) -> Seen:
     chat_type = key[1] if key is not None else str(row.get("chat_type") or "").strip().lower()
     chat_id = key[2] if key is not None else ""
     key_profile = key[3] if key is not None else ""
+    peer, peer_node, ws_client = _observed(row)
     return Seen(
         source=source, platform=platform, chat_type=chat_type, profile=profile,
         user_id=str(row.get("user_id") or "").strip(), session_id=sid,
         row_id=str(row.get("id") or ""), chat_id=chat_id,
         delegated=_delegated(source, row.get("model_config")),
-        profile_mismatch=bool(key_profile) and key_profile != profile)
+        profile_mismatch=bool(key_profile) and key_profile != profile,
+        peer=peer, peer_node=peer_node, ws_client=ws_client)
 
 
 def load(home: Optional[Path] = None) -> tuple[Entry, ...]:
@@ -319,10 +365,13 @@ def _entry(item: Any) -> Optional[Entry]:
         return None
     session_ids = _id_list(item.get("session_ids", []))
     user_ids = _id_list(item.get("user_ids", []))
-    if session_ids is None or user_ids is None:
+    peer_ips = _peer_ips(item.get("peer_ips", []))
+    peer_nodes = _peer_nodes(item.get("peer_nodes", []))
+    if session_ids is None or user_ids is None or peer_ips is None or peer_nodes is None:
         return None
     return Entry(name=name, source=source, profile=profile, enabled=enabled, platform=platform,
-                 chat_type=chat_type, session_ids=tuple(session_ids), user_ids=tuple(user_ids))
+                 chat_type=chat_type, session_ids=tuple(session_ids), user_ids=tuple(user_ids),
+                 peer_ips=peer_ips, peer_nodes=peer_nodes)
 
 
 def _optional(item: dict, key: str) -> Optional[str]:
@@ -349,6 +398,220 @@ def _identity(value: Any) -> bool:
     if not isinstance(value, str) or value != value.strip() or not value or len(value) > _ID_MAX:
         return False
     return not any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+def _peer_ips(raw: Any) -> Optional[tuple[str, ...]]:
+    """Canonical IPs, or None when the list is not a short list of IPs.
+    A port, a name, or a range is rejected so the file is not applied."""
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or len(raw) > _MAX_IDS:
+        return None
+    values: list[str] = []
+    for value in raw:
+        if not isinstance(value, str) or value != value.strip() or not value or len(value) > _ID_MAX:
+            return None
+        try:
+            values.append(str(ipaddress.ip_address(value)))
+        except ValueError:
+            return None
+    return tuple(values)
+
+
+def _peer_nodes(raw: Any) -> Optional[tuple[str, ...]]:
+    """Canonical node names, or None when one is not a node name."""
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list) or len(raw) > _MAX_IDS:
+        return None
+    values: list[str] = []
+    for value in raw:
+        if not isinstance(value, str) or value != value.strip() or not value:
+            return None
+        node = _matchable_node(value)
+        if not node:
+            return None
+        values.append(node)
+    return tuple(values)
+
+
+def _usable(peer: str, node: str) -> tuple[str, str]:
+    """``(ip, node)`` that may satisfy a peer list. A peer that was seen
+    and is not a real remote address drops the node too: a loopback or
+    port-0 observation must not match by name."""
+    ip = _matchable_ip(peer)
+    if peer.strip() and not ip:
+        return "", ""
+    return ip, _matchable_node(node)
+
+
+def _matchable_ip(raw: str) -> str:
+    """The canonical IP in ``raw``, or "" when it is missing, not an
+    address, loopback, unspecified, or port 0. A bare IP is kept. An
+    ``host:port`` with a real port keeps the host."""
+    text = raw.strip() if isinstance(raw, str) else ""
+    if not text or text.lower() in _NOT_A_NODE:
+        return ""
+    host, port = _split_peer(text)
+    if host is None or port == 0:
+        return ""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return ""
+    mapped = getattr(addr, "ipv4_mapped", None)
+    if mapped is not None:
+        addr = mapped
+    if addr.is_loopback or addr.is_unspecified:
+        return ""
+    return str(addr)
+
+
+def _matchable_node(raw: str) -> str:
+    """A stored node name, lowercased, or "" when it is not one. An IP
+    is not a node. ``unknown`` and ``localhost`` are not names."""
+    if not isinstance(raw, str):
+        return ""
+    text = raw.strip().lower().rstrip(".")
+    if not text or text in _NOT_A_NODE or len(text) > 253 or not _NODE.fullmatch(text):
+        return ""
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return text
+    return ""
+
+
+def _split_peer(text: str) -> tuple[Optional[str], Optional[int]]:
+    """``(host, port)`` from ``ip``, ``ip:port``, or ``[ip]:port``.
+    The port is None when the text is a bare address. The host is None
+    when the shape is not one of those. An unbracketed IPv6 value is a
+    bare address only when the whole text is an address."""
+    if text.startswith("["):
+        end = text.find("]")
+        if end < 0:
+            return None, None
+        host, rest = text[1:end], text[end + 1:]
+        if not rest:
+            return host, None
+        if not rest.startswith(":") or not rest[1:].isdigit():
+            return None, None
+        port = int(rest[1:])
+        return (host, port) if 0 <= port <= 65535 else (None, None)
+    if text.count(":") == 1:
+        host, port_text = text.rsplit(":", 1)
+        if not port_text.isdigit():
+            return None, None
+        port = int(port_text)
+        return (host, port) if 0 <= port <= 65535 else (None, None)
+    return text, None
+
+
+def _observed(row: dict[str, Any]) -> tuple[str, str, str]:
+    """``(peer, node, ws_client)`` for this turn.
+
+    A bound WebSocket is conclusive: its socket is the peer, and a
+    missing socket is an unknown peer. The logged client label is
+    returned beside it and is not the peer. With no WebSocket bound,
+    the session row's ``client_peer`` and ``client_peer_node`` are
+    what Hermes stored, and may both be empty."""
+    live = _live_peer(_current_transport())
+    if live is not None:
+        return live
+    return (str(row.get("client_peer") or "").strip(), str(row.get("client_peer_node") or "").strip(), "")
+
+
+def _current_transport() -> Any:
+    """The gateway transport bound to this turn, or None. Never imports
+    the gateway: a copy this plugin imported would be a private one."""
+    getter = getattr(sys.modules.get("tui_gateway.transport"), "current_transport", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:  # noqa: BLE001 — unreadable: no peer
+        return None
+
+
+def _live_peer(transport: Any) -> Optional[tuple[str, str, str]]:
+    """None when ``transport`` is not a WebSocket and not a fanout of
+    one. Otherwise ``(socket peer, node, logged client)``. More than
+    one socket, or a socket that can't be read, is an unknown peer:
+    the row is not consulted in its place."""
+    leaves = _ws_leaves(transport)
+    if leaves is None:
+        return ("", "", "")
+    if not leaves:
+        return None
+    if len(leaves) != 1:
+        return ("", "", "")
+    leaf = leaves[0]
+    label = getattr(leaf, "_peer", None)
+    ws_client = label.strip() if isinstance(label, str) else ""
+    endpoint = _socket_endpoint(getattr(leaf, "_ws", None))
+    if endpoint is None:
+        return ("", "", ws_client)
+    host, port = endpoint
+    peer = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    node = ""
+    if _matchable_ip(peer):
+        raw = getattr(leaf, "server_peer_node", None)
+        node = raw if isinstance(raw, str) else ""
+    return peer, node, ws_client
+
+
+def _ws_leaves(transport: Any) -> Optional[list]:
+    """WebSocket transports under ``transport``. None when a fanout
+    can't be read. An object without a socket is not one, so the
+    process fallback and the broker's own transport are not peers."""
+    if transport is None:
+        return []
+    peers = getattr(transport, "transports", None)
+    if callable(peers):
+        try:
+            found = list(peers())
+        except Exception:  # noqa: BLE001 — unreadable: unknown peer
+            return None
+        leaves: list = []
+        for peer in found:
+            nested = _ws_leaves(peer)
+            if nested is None:
+                return None
+            leaves.extend(nested)
+        return leaves
+    if getattr(transport, "_ws", None) is not None:
+        return [transport]
+    return []
+
+
+def _socket_endpoint(ws: Any) -> Optional[tuple[str, int]]:
+    """``(host, port)`` from the upgrade's TCP socket, or None. Headers
+    and ``ws.client`` are not read: those are where a proxy rewrite
+    shows up."""
+    if ws is None:
+        return None
+    try:
+        scope = getattr(ws, "scope", None) or {}
+        extensions = scope.get("extensions") if isinstance(scope, dict) else None
+        raw = extensions.get("transport") if isinstance(extensions, dict) else None
+        if raw is None:
+            raw = getattr(ws, "transport", None)
+        get_extra = getattr(raw, "get_extra_info", None)
+        sock = get_extra("socket") if callable(get_extra) else None
+        peer = sock.getpeername() if sock is not None and hasattr(sock, "getpeername") else None
+    except Exception:  # noqa: BLE001 — unreadable: unknown peer
+        return None
+    if not isinstance(peer, tuple) or len(peer) < 2:
+        return None
+    host, port = peer[0], peer[1]
+    if isinstance(host, bytes):
+        try:
+            host = host.decode("ascii")
+        except UnicodeError:
+            return None
+    if not isinstance(host, str) or isinstance(port, bool) or not isinstance(port, int):
+        return None
+    return host.split("%", 1)[0], port
 
 
 def _token(value: Any, pattern: re.Pattern[str]) -> Optional[str]:

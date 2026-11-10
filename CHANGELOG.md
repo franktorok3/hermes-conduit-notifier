@@ -13,6 +13,11 @@ checks it). The format is fixed, because Conduit reads it:
 - One line per change, starting with `- `. Fixes say what goes wrong without
   the update. Plain words: these show on a phone.
 
+## 0.154.2 (2026-11-10)
+
+### Security
+- A listed chat can also be limited to the network address the server saw on the connection. The iPhone and the Mac stay off, and an address a proxy or the app sends is not used.
+
 ## 0.154.1 (2026-11-10)
 
 ### New and improved
