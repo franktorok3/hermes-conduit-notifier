@@ -34,6 +34,10 @@ class ReservationTests(unittest.TestCase):
         self.assertIs(self.reserve("after600"), False)
 
     def test_concurrent_reservations_never_exceed_limit(self):
+        # Exercise concurrent reservations on an initialized WAL store, as used
+        # by the watcher. First-open WAL setup is a separate pre-existing race.
+        with self.store._db():
+            pass
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             results = list(pool.map(self.reserve, map(str, range(30))))
         self.assertEqual(results.count(True), 12)
