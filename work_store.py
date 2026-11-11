@@ -761,6 +761,37 @@ class Store:
             con.execute("DELETE FROM events WHERE at < ?", (now - EVENTS_KEEP_S,))
         return True
 
+    def flag_reserve(self, ref: str, text: str, *, source: str, key: str,
+                     others: list[str], hourly_limit: int) -> Optional[bool]:
+        """Atomically deduplicate and reserve a wake before external delivery.
+
+        None means duplicate; False records a held flag. Unknown historical
+        details consume capacity conservatively. Database failures propagate.
+        A reservation is never replayed after uncertain delivery.
+        """
+        if not key or hourly_limit < 0:
+            raise ValueError("flag reservation requires a key and nonnegative limit")
+        with self._db() as con:
+            now = time.time()
+            if con.execute("SELECT 1 FROM events WHERE key = ?", (key,)).fetchone():
+                return None
+            used = 0
+            for row in con.execute("SELECT detail FROM events WHERE kind = 'flag' AND at >= ?",
+                                   (now - 3600.0,)):
+                try:
+                    detail = json.loads(row["detail"])
+                except (ValueError, TypeError):
+                    detail = None
+                if not isinstance(detail, dict) or detail.get("woke") is not False:
+                    used += 1
+            woke = used < hourly_limit
+            detail = json.dumps({"with": others, "woke": woke})
+            con.execute("INSERT INTO events (ref, kind, who, source, text, detail, at, key) "
+                        "VALUES (?, 'flag', 'watch', ?, ?, ?, ?, ?)",
+                        (ref, source, _clip(text, EVENT_CHARS), detail, now, key))
+            con.execute("DELETE FROM events WHERE at < ?", (now - EVENTS_KEEP_S,))
+        return woke
+
     def events(self, ref: str, *, since: float = 0.0, kinds: Optional[tuple[str, ...]] = None,
                limit: int = 50) -> list[dict]:
         """A workstream's newest events, oldest first."""

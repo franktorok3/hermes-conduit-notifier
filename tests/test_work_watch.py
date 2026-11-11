@@ -256,6 +256,51 @@ def test_flags_kept_without_a_turn_dont_reopen_the_hours_allowance(on, hermes, h
         assert flag["woke"] is (number == 0)
 
 
+def _reserve_wake(store, key):
+    """One wake already taken, through the same reservation check() uses."""
+    return store.flag_reserve("W1", "a connection", source="events:1", key=key, others=["W2"],
+                              hourly_limit=watch.FLAGS_PER_HOUR)
+
+
+def _next_flag(home):
+    call("work_progress", {"found": "the v1 users API is gone"}, session_id=WORKER)
+    return watch.check(home, ask=Helper(FLAG))
+
+
+def test_under_the_hourly_cap_the_next_flag_wakes(on, hermes, home, told):
+    two(on)
+    for number in range(watch.FLAGS_PER_HOUR - 1):
+        assert _reserve_wake(on, f"wake:{number}") is True
+    assert _next_flag(home)["woke"] is True
+
+
+def test_at_the_hourly_cap_the_next_flag_does_not_wake(on, hermes, home, told):
+    two(on)
+    for number in range(watch.FLAGS_PER_HOUR):
+        assert _reserve_wake(on, f"wake:{number}") is True
+    assert _next_flag(home)["woke"] is False
+
+
+def test_held_flags_cannot_hide_earlier_wakes_from_the_hourly_cap(on, hermes, home, told):
+    # Codex on PR #2: twelve wakes, then 500 held flags, and the next flag woke.
+    two(on)
+    for number in range(watch.FLAGS_PER_HOUR):
+        assert _reserve_wake(on, f"wake:{number}") is True
+    for number in range(watch.FLAGS_COUNTED):
+        on.event_add("W1", "flag", "watch", "held", key=f"held:{number}",
+                     detail=json.dumps({"with": ["W2"], "woke": False}))
+    assert _next_flag(home)["woke"] is False
+
+
+def test_wake_flags_older_than_an_hour_no_longer_count(on, hermes, home, told):
+    two(on)
+    then = time.time() - 3600.0 - 1
+    for number in range(watch.FLAGS_PER_HOUR):
+        on.event_add("W1", "flag", "watch", "old", key=f"old:{number}",
+                     detail=json.dumps({"with": ["W2"], "woke": True}), at=then)
+    assert _next_flag(home)["woke"] is True
+
+
 def test_a_long_report_keeps_the_line_the_flag_is_about(on, hermes, home, told):
     two(on)
     call("work_progress", {"found": ["GET /v1/users now returns 410 Gone", "the docs say v2", "v2 needs a token",
