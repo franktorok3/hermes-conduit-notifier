@@ -224,7 +224,6 @@ def check(home: Path, words: Any = (), ask: Optional[Callable[[str, str], tuple[
                 "flagged " + ", ".join([source, *others]) if flagged else "nothing to flag", tokens)
     if not flagged:
         return None
-    woke = sum(1 for flag in flags if _detail(flag).get("woke")) < FLAGS_PER_HOUR
     named = [event for event in new if event["ref"] in (source, *others)]
     first = next(event for event in named if event["ref"] == source)  # what the flag is about stays
     read = [first] + [event for event in named[-(READ_LINES - 1):] if event is not first]
@@ -233,9 +232,9 @@ def check(home: Path, words: Any = (), ask: Optional[Callable[[str, str], tuple[
             had = [event for event in store.events(ref, since=now - work_coord.BOARD_AGE_S, kinds=KINDS,
                                                    limit=WORK_LINES + len(new)) if event["id"] <= last]
             read = had[-1:] + read  # one the helper was shown, not one that came as it answered
-    kept = store.event_add(source, "flag", "watch", why, source="events:" + ",".join(str(event["id"]) for event in read),
-                           key=f"flag:{last}", detail=json.dumps({"with": others, "woke": woke}))
-    if not kept:
+    woke = store.flag_reserve(source, why, source="events:" + ",".join(str(event["id"]) for event in read),
+                              key=f"flag:{last}", others=others, hourly_limit=FLAGS_PER_HOUR)
+    if woke is None:
         return None  # another process read the same lines first
     flag = {"ref": source, "with": others, "why": why, "woke": woke}
     if woke and _tell is not None:
