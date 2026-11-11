@@ -13,6 +13,11 @@ checks it). The format is fixed, because Conduit reads it:
 - One line per change, starting with `- `. Fixes say what goes wrong without
   the update. Plain words: these show on a phone.
 
+## 0.157.4 (2026-11-10)
+
+### Fixes
+- The helper that reads workstreams can start more than twelve hidden turns in an hour. Without the update, five hundred held flags hide the twelve already started, and another turn begins.
+
 ## 0.157.3 (2026-11-10)
 
 ### New and improved

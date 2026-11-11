@@ -38,7 +38,7 @@ TASK_DESCRIPTION = ("Reads what a bot's workstreams report while they work and t
 # Reports a moment apart are read together.
 BATCH_S = 4.0
 NEW_EVENTS = 12
-FLAGS_COUNTED = 500  # an hour's, to count the turns they started
+FLAGS_COUNTED = 500  # recent flags the helper is shown, and the cap note names
 NEW_AGE_S = 3600.0
 OPEN_WORK = 12
 WORK_LINES = 6
